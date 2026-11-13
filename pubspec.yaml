@@ -1,0 +1,38 @@
+name: p91_player
+description: "P91 Player - a rebuilt cross-platform 91 video player, iOS first."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+# Versions are pinned exactly (no caret ranges) so `flutter pub get` on a
+# clean CI runner resolves deterministically and never silently pulls a
+# release that requires a newer Flutter than the pinned toolchain.
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: 1.0.8
+
+  provider: 6.1.2
+
+  dio: 5.7.0
+  html: 0.15.4
+
+  hive: 2.2.3
+  hive_flutter: 1.1.0
+  path_provider: 2.1.4
+
+  video_player: 2.9.2
+  wakelock_plus: 1.2.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/categories.json

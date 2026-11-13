@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for `flutter build ipa` (SIGNED build only).
+
+  Fill in your Apple Developer Team ID below (10-char), or set it from CI by
+  replacing __TEAM_ID__ in the workflow. `method` choices:
+    development | ad-hoc | app-store | enterprise
+  For private sideloading "+ AltStore" use ad-hoc (needs registered UDIDs)
+  or development.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>ad-hoc</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>compileBitcode</key>
+	<false/>
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>
