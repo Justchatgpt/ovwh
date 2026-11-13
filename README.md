@@ -136,6 +136,12 @@ flutter build ipa --release
 - **已签名（可选）**：`Run workflow` 勾选 `signed=true`，并配置 Secrets：`BUILD_CERTIFICATE_BASE64`、`P12_PASSWORD`、`MOBILEPROVISION_BASE64`、`KEYCHAIN_PASSWORD`；把 `ios/ExportOptions.plist` 里的 `__TEAM_ID__` 换成你的 Team ID。
 - workflow 里 `flutter create` 会重建 `Runner.xcodeproj`（本仓库不提交它），再覆盖回我们的 `Info.plist / AppDelegate.swift / Podfile`，因此无需本机 Xcode 工程。
 
+## 更新记录
+
+### v1.1.0
+- 列表改为**分页浏览**：底部「上一页 / 下一页 / 第 x/y 页 / 跳转」，可直接跳到很早的页，方便找以前的视频。
+- 新增设置项 **设置 → 列表 → 每页视频数**（10 / 20 / 30 / 50 / 100）：一次显示多少条；受源站每页条数限制时，App 会自动跨多页拼够数量，不丢条目。
+
 ## 9. 免责与合规
 
 仅供个人学习与本地研究。所有目标站点、域名均视为本地测试夹具；请遵守所在地法律法规。
