@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/settings_controller.dart';
 import '../../data/repositories/video_repository.dart';
-import '../../shared/widgets/paged_video_grid.dart';
+import '../../shared/widgets/paged_video_browser.dart';
 import '../../shared/widgets/status_view.dart';
 import '../detail/detail_page.dart';
 
@@ -32,6 +33,7 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final repo = context.read<VideoRepository>();
+    final pageSize = context.watch<SettingsController>().pageSize;
     return Scaffold(
       appBar: AppBar(
         title: TextField(
@@ -50,9 +52,10 @@ class _SearchPageState extends State<SearchPage> {
       ),
       body: _submitted.isEmpty
           ? const StatusView(empty: true, emptyText: '输入关键词开始搜索')
-          : PagedVideoGrid(
-              key: ValueKey(_submitted),
-              fetcher: (page) => repo.search(_submitted, page),
+          : PagedVideoBrowser(
+              key: ValueKey('$_submitted-$pageSize'),
+              pageSize: pageSize,
+              fetch: (serverPage) => repo.search(_submitted, serverPage),
               onItemTap: (item) => openDetail(context, item),
               emptyText: '没有找到相关视频',
             ),

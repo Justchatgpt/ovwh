@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants.dart';
+import '../../core/settings_controller.dart';
 import '../../data/repositories/video_repository.dart';
-import '../../shared/widgets/paged_video_grid.dart';
+import '../../shared/widgets/paged_video_browser.dart';
 import '../detail/detail_page.dart';
 import '../search/search_page.dart';
 
@@ -15,15 +16,25 @@ class CategoryPage extends StatefulWidget {
 
 class _CategoryPageState extends State<CategoryPage> {
   String _category = 'rf';
+  int _nonce = 0;
 
   @override
   Widget build(BuildContext context) {
     final repo = context.read<VideoRepository>();
+    final pageSize = context.watch<SettingsController>().pageSize;
     final entries = ApiConstants.categories.entries.toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('分类'),
         actions: [
+          IconButton(
+            tooltip: '刷新',
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              repo.clearCache();
+              setState(() => _nonce++);
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: () => Navigator.of(context).push(
@@ -52,10 +63,10 @@ class _CategoryPageState extends State<CategoryPage> {
             ),
           ),
           Expanded(
-            child: PagedVideoGrid(
-              key: ValueKey(_category),
-              fetcher: (page) =>
-                  repo.category(_category, page, refresh: page == 1),
+            child: PagedVideoBrowser(
+              key: ValueKey('$_category-$pageSize-$_nonce'),
+              pageSize: pageSize,
+              fetch: (serverPage) => repo.category(_category, serverPage),
               onItemTap: (item) => openDetail(context, item),
             ),
           ),

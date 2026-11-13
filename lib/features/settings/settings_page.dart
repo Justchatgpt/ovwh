@@ -74,6 +74,14 @@ class SettingsPage extends StatelessWidget {
               if (context.mounted) _applyBypass(context, settings);
             },
           ),
+          const _SectionHeader('列表'),
+          ListTile(
+            leading: const Icon(Icons.grid_view_outlined),
+            title: const Text('每页视频数'),
+            subtitle: Text('${settings.pageSize} 个/页'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _editPageSize(context, settings),
+          ),
           const _SectionHeader('外观'),
           ListTile(
             leading: const Icon(Icons.palette_outlined),
@@ -182,8 +190,7 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  void _editAttempts(BuildContext context, SettingsController settings) {
-    const options = [4, 8, 12, 16];
+  void _editAttempts(BuildContext context, SettingsController settings) {    const options = [4, 8, 12, 16];
     showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -206,6 +213,45 @@ class SettingsPage extends StatelessWidget {
                   },
                 ),
             ]),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _editPageSize(BuildContext context, SettingsController settings) {
+    const options = [10, 20, 30, 50, 100];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text('每页视频数', style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final n in options)
+                  ChoiceChip(
+                    label: Text('$n 个'),
+                    selected: settings.pageSize == n,
+                    onSelected: (_) async {
+                      await settings.setPageSize(n);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text('每页数量越多，翻页找旧视频越快；受源站每页条数限制，App 会自动跨多页拼够数量。',
+                  style: TextStyle(fontSize: 12), textAlign: TextAlign.center),
+            ),
             const SizedBox(height: 12),
           ],
         ),

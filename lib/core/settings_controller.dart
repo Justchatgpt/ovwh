@@ -14,6 +14,7 @@ class SettingsController extends ChangeNotifier {
   static const _kProxyPool = 'proxyPool';
   static const _kMaxAttempts = 'maxAttempts';
   static const _kWebviewFallback = 'webviewFallback';
+  static const _kPageSize = 'pageSize';
 
   SettingsController() {
     _host = (LocalStore.settings.get(_kHost, defaultValue: ApiConstants.defaultHost) ??
@@ -30,6 +31,7 @@ class SettingsController extends ChangeNotifier {
     _maxAttempts = ((LocalStore.settings.get(_kMaxAttempts, defaultValue: 8) ?? 8) as num).toInt();
     _webviewFallback =
         (LocalStore.settings.get(_kWebviewFallback, defaultValue: true) ?? true) as bool;
+    _pageSize = ((LocalStore.settings.get(_kPageSize, defaultValue: 20) ?? 20) as num).toInt();
   }
 
   late String _host;
@@ -41,6 +43,7 @@ class SettingsController extends ChangeNotifier {
   late String _proxyPoolText;
   late int _maxAttempts;
   late bool _webviewFallback;
+  late int _pageSize;
 
   String get host => _host;
   double get defaultSpeed => _speed;
@@ -59,6 +62,9 @@ class SettingsController extends ChangeNotifier {
 
   /// Use a hidden WKWebView to pass mirror anti-bot JS challenges.
   bool get webviewFallback => _webviewFallback;
+
+  /// How many videos a list "page" shows (client-side pagination).
+  int get pageSize => _pageSize;
 
   Future<void> setHost(String value) async {
     _host = value.trim();
@@ -111,6 +117,12 @@ class SettingsController extends ChangeNotifier {
   Future<void> setWebviewFallback(bool value) async {
     _webviewFallback = value;
     await LocalStore.settings.put(_kWebviewFallback, value);
+    notifyListeners();
+  }
+
+  Future<void> setPageSize(int value) async {
+    _pageSize = (value.clamp(5, 200) as num).toInt();
+    await LocalStore.settings.put(_kPageSize, _pageSize);
     notifyListeners();
   }
 }
