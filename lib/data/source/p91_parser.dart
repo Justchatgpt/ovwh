@@ -45,15 +45,24 @@ class P91Parser {
     List<VideoItem> raw = _parseModernCards(doc);
     if (raw.isEmpty) raw = _parseLegacyList(doc);
     if (raw.isEmpty) raw = _parseCardRegExp(html);
-    return _dedupeByViewKey(raw);
+    return _dedupeByContent(raw);
   }
 
-  static List<VideoItem> _dedupeByViewKey(List<VideoItem> items) {
-    final seen = <String>{};
+  /// Collapse duplicate cards by BOTH `viewKey` and real video id (thumbnail
+  /// id). 91 renders the same video several times AND re-publishes it under
+  /// multiple viewKeys with the same cover, so a single key is not enough.
+  static List<VideoItem> _dedupeByContent(List<VideoItem> items) {
+    final seenVk = <String>{};
+    final seenThumb = <String>{};
     final out = <VideoItem>[];
     for (final it in items) {
       if (it.viewKey.isEmpty) continue;
-      if (seen.add(it.viewKey)) out.add(it);
+      final t = it.thumbId;
+      if (seenVk.contains(it.viewKey)) continue;
+      if (t != null && seenThumb.contains(t)) continue;
+      seenVk.add(it.viewKey);
+      if (t != null) seenThumb.add(t);
+      out.add(it);
     }
     return out;
   }

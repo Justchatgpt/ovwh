@@ -26,6 +26,27 @@ class VideoItem {
     this.ownerName = '',
   });
 
+  /// The numeric video id embedded in the thumbnail path, e.g.
+  /// `https://cdn/thumb/1259323.jpg` -> `1259323`. This equals the real media
+  /// id (the same number appears in `mp43/1259323.mp4`), and the SAME video is
+  /// frequently published under multiple `viewKey`s on 91 — so this is the
+  /// correct identity for de-duplication, not `viewKey`.
+  String? get thumbId {
+    if (cover.isEmpty) return null;
+    final m = RegExp(r'/thumb/(\d+)\.').firstMatch(cover) ??
+        RegExp(r'/(\d{3,})\.(?:jpg|jpeg|png|webp)(?:\?|$)',
+                caseSensitive: false)
+            .firstMatch(cover);
+    return m?.group(1);
+  }
+
+  /// Stable identity used to collapse duplicates: real video id if known,
+  /// otherwise fall back to `viewKey`.
+  String get contentKey {
+    final id = thumbId;
+    return id != null ? 'v:$id' : 'k:$viewKey';
+  }
+
   VideoItem copyWith({
     String? title,
     String? cover,

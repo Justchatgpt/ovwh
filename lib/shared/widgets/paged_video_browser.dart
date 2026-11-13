@@ -9,15 +9,16 @@ import 'video_grid.dart'; // videoGridDelegate
 
 /// Explicit page-number browser for a 91 listing.
 ///
-/// The site paginates server-side with a fixed count per page. We expose a
-/// client-side "videos per page" size: the whole server stream is chunked into
-/// consecutive windows of [pageSize] items, so the user can jump straight to an
-/// old page (e.g. page 300) instead of infinite-scrolling forever.
-///
-/// Item N in the flat stream lives on server page `N ~/ serverPageSize + 1`;
-/// to render app-page P we fetch exactly the server page(s) that cover
-/// [start, end) and slice — so no items are dropped no matter how [pageSize]
-/// compares to the server's page size.
+/// Key correctness points (learned from live data, 2026-11-14):
+///  * The site renders each card several times → we de-dupe by `contentKey`
+///    (real video id from the thumbnail, NOT viewKey, because one video is
+///    published under multiple viewKeys with the same cover).
+///  * De-duplicated server pages have *variable* item counts (18~24), so we do
+///    NOT index into a global flat stream. Instead each app-page covers a
+///    contiguous block of `k` server pages, where
+///    `k = ceil(pageSize / serverPageSize)`. Consecutive blocks tile all server
+///    pages exactly once → no item skipped, no item shown twice on a page, and
+///    jumping to page P still costs only `k` fetches.
 class PagedVideoBrowser extends StatefulWidget {
   const PagedVideoBrowser({
     super.key,
@@ -41,7 +42,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
   final ScrollController _scroll = ScrollController();
 
   int _appPage = 1;
-  int _serverPageSize = 0; // measured from first server page
+  int _serverPageSize = 0; // de-duplicated count of server page 1
   int _totalServerPages = 1;
   List<VideoItem> _items = <VideoItem>[];
   bool _loading = true;
@@ -59,10 +60,15 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     super.dispose();
   }
 
+  /// How many server pages make up one app-page.
+  int get _serverPagesPerApp {
+    final s = _serverPageSize > 0 ? _serverPageSize : 24;
+    return math.max(1, (widget.pageSize / s).ceil());
+  }
+
   int get _appTotalPages {
-    if (_serverPageSize <= 0) return 1;
-    final totalItems = _totalServerPages * _serverPageSize;
-    return math.max(1, (totalItems / widget.pageSize).ceil());
+    final k = _serverPagesPerApp;
+    return math.max(1, (_totalServerPages / k).ceil());
   }
 
   Future<void> _load(int appPage) async {
@@ -71,33 +77,25 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
       _error = null;
     });
     try {
-      if (_serverPageSize <= 0) {
-        final first = await widget.fetch(1);
-        _serverPageSize = first.items.isNotEmpty ? first.items.length : 20;
-        _totalServerPages = math.max(1, first.totalPage);
-        if (appPage == 1) {
-          _items = first.items.take(widget.pageSize).toList();
-          _appPage = 1;
-          return;
-        }
-      }
-
-      final start = (appPage - 1) * widget.pageSize;
-      final end = start + widget.pageSize; // exclusive
-      final s1 = (start ~/ _serverPageSize) + 1;
-      final s2 = ((end - 1) ~/ _serverPageSize) + 1;
+      final k = _serverPagesPerApp;
+      final s1 = (appPage - 1) * k + 1;
+      final s2 = appPage * k;
 
       final buffer = <VideoItem>[];
       for (var sp = s1; sp <= s2; sp++) {
         if (sp < 1) continue;
+        if (_serverPageSize > 0 && sp > _totalServerPages) break;
         final r = await widget.fetch(sp);
+        if (_serverPageSize <= 0) {
+          _serverPageSize = r.items.isNotEmpty ? r.items.length : 24;
+        }
         if (r.totalPage > _totalServerPages) _totalServerPages = r.totalPage;
         buffer.addAll(r.items);
+        // Stop early if a page came back empty (past the real end).
+        if (r.items.isEmpty) break;
       }
 
-      final base = (s1 - 1) * _serverPageSize;
-      final offset = math.max(0, start - base);
-      _items = _dedupe(buffer.skip(offset).take(widget.pageSize).toList());
+      _items = _dedupe(buffer);
       _appPage = appPage;
     } catch (e) {
       _error = '$e';
@@ -116,13 +114,19 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     });
   }
 
-  /// Guard against cross-page duplicates (same viewKey on adjacent server
-  /// pages), preserving first-seen order.
+  /// Collapse duplicates by viewKey OR real video id (thumbnail id), whichever
+  /// matches first. Keeps the first occurrence.
   List<VideoItem> _dedupe(List<VideoItem> items) {
-    final seen = <String>{};
+    final seenVk = <String>{};
+    final seenThumb = <String>{};
     final out = <VideoItem>[];
     for (final it in items) {
-      if (seen.add(it.viewKey)) out.add(it);
+      final t = it.thumbId;
+      if (it.viewKey.isNotEmpty && seenVk.contains(it.viewKey)) continue;
+      if (t != null && seenThumb.contains(t)) continue;
+      if (it.viewKey.isNotEmpty) seenVk.add(it.viewKey);
+      if (t != null) seenThumb.add(t);
+      out.add(it);
     }
     return out;
   }
@@ -199,7 +203,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
               onPressed: _appPage > 1 ? () => _load(_appPage - 1) : null,
               icon: const Icon(Icons.chevron_left),
             ),
-            Text('第 $_appPage / $total 页 · ${widget.pageSize} 个/页',
+            Text('第 $_appPage / $total 页 · 本页 ${_items.length} 个',
                 style: const TextStyle(fontSize: 13)),
             IconButton(
               tooltip: '下一页',
