@@ -1,0 +1,114 @@
+name: Build unsigned iOS IPA
+
+# Self-contained copy for when THIS folder (p91_player_ios) is the repo root.
+# Produces a side-loadable unsigned .ipa — no Apple account needed.
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      flutter_version:
+        description: 'Flutter version'
+        required: false
+        default: '3.24.5'
+      signed:
+        description: 'Also build a signed IPA (needs secrets)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: ${{ github.event.inputs.flutter_version || '3.24.5' }}
+
+jobs:
+  build-ipa:
+    name: macOS / unsigned IPA
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || \
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Cache Flutter SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/flutter
+          key: flutter-${{ runner.os }}-${{ env.FLUTTER_VERSION }}-v1
+
+      - name: Install Flutter (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FR="${RUNNER_TEMP}/flutter"
+          if [ ! -x "$FR/bin/flutter" ]; then
+            git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$FR"
+          fi
+          echo "$FR/bin" >> "$GITHUB_PATH"
+          echo "PUB_CACHE=$RUNNER_TEMP/pub-cache" >> "$GITHUB_ENV"
+          "$FR/bin/flutter" --version
+          "$FR/bin/flutter" config --no-analytics
+          "$FR/bin/flutter" precache --ios
+
+      - name: Cache pub
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.yaml') }}
+
+      - name: Generate iOS scaffold (keep lib/ + ios/ config)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp ios/Runner/Info.plist /tmp/Info.plist.ours
+          cp ios/Runner/AppDelegate.swift /tmp/AppDelegate.swift.ours
+          cp ios/Podfile /tmp/Podfile.ours
+          flutter create --platforms=ios --org com.p91 --project-name p91_player --ios-language swift .
+          cp /tmp/Info.plist.ours ios/Runner/Info.plist
+          cp /tmp/AppDelegate.swift.ours ios/Runner/AppDelegate.swift
+          cp /tmp/Podfile.ours ios/Podfile
+          rm -f test/widget_test.dart
+
+      - run: flutter pub get
+
+      - name: Analyze (non-fatal)
+        continue-on-error: true
+        run: flutter analyze --no-pub
+
+      - name: CocoaPods
+        working-directory: ios
+        run: pod install --repo-update
+
+      - name: Build unsigned .app
+        run: flutter build ios --release --no-codesign --no-pub --build-number="${GITHUB_RUN_NUMBER}"
+
+      - name: Package unsigned .ipa
+        run: |
+          set -euo pipefail
+          APP=$(find build/ios/iphoneos -maxdepth 1 -name '*.app' -type d | head -1)
+          [ -n "$APP" ] || { echo "::error::no .app"; exit 1; }
+          rm -rf /tmp/p91_ipa && mkdir -p /tmp/p91_ipa/Payload
+          cp -R "$APP" /tmp/p91_ipa/Payload/
+          find /tmp/p91_ipa -name '.DS_Store' -delete || true
+          ( cd /tmp/p91_ipa && zip -qry "$GITHUB_WORKSPACE/build/p91_player_unsigned.ipa" Payload )
+          shasum -a 256 build/p91_player_unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: p91-player-unsigned-ipa
+          path: build/p91_player_unsigned.ipa
+          if-no-files-found: error
