@@ -1,0 +1,16 @@
+# Flutter/Dart/Pod
+**/dgph
+*.mode1v3
+*.mode2v3
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.perspectivev3
+!default.perspectivev3
+**/Flutter/App.framework
+**/Flutter/ephemeral
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+Pods/
+**/.symlinks/
+.cocoapods/
