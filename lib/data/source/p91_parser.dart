@@ -35,13 +35,27 @@ class P91Parser {
 
   /// Parse a list page. Handles the modern card layout and the legacy
   /// `#fullside .listchannel` layout. Returns [] when the page has no cards.
+  ///
+  /// The 91 list HTML renders the SAME video multiple times (responsive copies
+  /// of each card) — live probe 2026-11-14: page1 44 cards / 24 unique,
+  /// page2 42/24, page3 39/24. We de-duplicate by `viewKey` here so the UI
+  /// shows each video once and pagination counts match the site's real 24/page.
   static List<VideoItem> parseList(String html) {
     final doc = html_parser.parse(html);
-    final modern = _parseModernCards(doc);
-    if (modern.isNotEmpty) return modern;
-    final legacy = _parseLegacyList(doc);
-    if (legacy.isNotEmpty) return legacy;
-    return _parseCardRegExp(html);
+    List<VideoItem> raw = _parseModernCards(doc);
+    if (raw.isEmpty) raw = _parseLegacyList(doc);
+    if (raw.isEmpty) raw = _parseCardRegExp(html);
+    return _dedupeByViewKey(raw);
+  }
+
+  static List<VideoItem> _dedupeByViewKey(List<VideoItem> items) {
+    final seen = <String>{};
+    final out = <VideoItem>[];
+    for (final it in items) {
+      if (it.viewKey.isEmpty) continue;
+      if (seen.add(it.viewKey)) out.add(it);
+    }
+    return out;
   }
 
   static List<VideoItem> _parseModernCards(dom.Document doc) {

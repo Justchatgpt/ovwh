@@ -97,7 +97,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
 
       final base = (s1 - 1) * _serverPageSize;
       final offset = math.max(0, start - base);
-      _items = buffer.skip(offset).take(widget.pageSize).toList();
+      _items = _dedupe(buffer.skip(offset).take(widget.pageSize).toList());
       _appPage = appPage;
     } catch (e) {
       _error = '$e';
@@ -114,6 +114,17 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.jumpTo(0);
     });
+  }
+
+  /// Guard against cross-page duplicates (same viewKey on adjacent server
+  /// pages), preserving first-seen order.
+  List<VideoItem> _dedupe(List<VideoItem> items) {
+    final seen = <String>{};
+    final out = <VideoItem>[];
+    for (final it in items) {
+      if (seen.add(it.viewKey)) out.add(it);
+    }
+    return out;
   }
 
   Future<void> _promptJump() async {
