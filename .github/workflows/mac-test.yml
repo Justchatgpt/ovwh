@@ -1,0 +1,7 @@
+name: mac-test
+on: workflow_dispatch
+jobs:
+  ping:
+    runs-on: macos-14
+    steps:
+      - run: sw_vers
