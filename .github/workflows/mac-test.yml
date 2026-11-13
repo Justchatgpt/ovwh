@@ -2,6 +2,10 @@ name: mac-test
 on: workflow_dispatch
 jobs:
   ping:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - run: sw_vers
