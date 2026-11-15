@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../category/category_page.dart';
 import '../home/home_page.dart';
 import '../library/library_page.dart';
+import '../random/random_feed_page.dart';
 import '../settings/settings_page.dart';
 
 class RootShell extends StatefulWidget {
@@ -14,22 +15,25 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _index = 0;
 
-  final _pages = const <Widget>[
-    HomePage(),
-    CategoryPage(),
-    LibraryPage(),
-    SettingsPage(),
-  ];
+  static const int _randomIndex = 1;
 
   @override
   Widget build(BuildContext context) {
+    final pages = <Widget>[
+      const HomePage(),
+      RandomFeedPage(isActive: _index == _randomIndex),
+      const CategoryPage(),
+      const LibraryPage(),
+      const SettingsPage(),
+    ];
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
+      body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: '首页'),
+          NavigationDestination(icon: Icon(Icons.casino_outlined), selectedIcon: Icon(Icons.casino), label: '随机'),
           NavigationDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view), label: '分类'),
           NavigationDestination(icon: Icon(Icons.video_library_outlined), selectedIcon: Icon(Icons.video_library), label: '媒体库'),
           NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: '设置'),
