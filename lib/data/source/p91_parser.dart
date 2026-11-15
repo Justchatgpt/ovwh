@@ -225,21 +225,34 @@ class P91Parser {
         if (n != null && n > 0) candidates.add(n);
       }
     }
-    final text = doc.text;
-    final m = RegExp(r'(\d+)\s*[-–~]\s*(\d+)\s*(?:共|of|/|总)\s*([\d,]+)',
-            caseSensitive: false)
+    final text = _listHeaderText(doc);
+    // Separator-agnostic: "1 - 24 <garbage 共> 13610" -> first,last,total.
+    // The site is GBK while its meta claims utf-8, so '共' may decode to
+    // replacement chars — never rely on the literal character.
+    final m = RegExp(r'(\d{1,5})\s*-\s*(\d{1,5})\s*[^0-9]{0,12}?(\d[\d,]{2,})')
         .firstMatch(text);
     if (m != null) {
       final first = int.tryParse(m.group(1)!);
       final last = int.tryParse(m.group(2)!);
       final totalItems = int.tryParse(m.group(3)!.replaceAll(',', ''));
-      if (first != null && last != null && totalItems != null && last >= first) {
+      if (first != null &&
+          last != null &&
+          totalItems != null &&
+          last >= first &&
+          totalItems >= last) {
         final perPage = last - first + 1;
         if (perPage > 0) candidates.add((totalItems / perPage).ceil());
       }
     }
     if (candidates.isEmpty) return null;
     return candidates.reduce((a, b) => a > b ? a : b);
+  }
+
+  /// Prefer the "video X - Y of N" header element, else whole document text.
+  static String _listHeaderText(dom.Document doc) {
+    final vp = doc.querySelector('.videopaging');
+    if (vp != null && vp.text.trim().isNotEmpty) return vp.text;
+    return doc.text;
   }
 
   // ---------------------------------------------------------------------------
