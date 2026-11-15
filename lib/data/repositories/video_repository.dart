@@ -4,6 +4,16 @@ import '../source/p91_api.dart';
 import '../source/proxy_pool.dart';
 import 'library_repository.dart';
 
+/// Result of a publish-date seek.
+class DateSeekResult {
+  DateSeekResult({required this.page, required this.pageDate, required this.matched});
+  final int page;
+  final DateTime? pageDate;
+
+  /// True when a page whose date is at/older than the target was found.
+  final bool matched;
+}
+
 /// Facade the UI talks to. Wraps [P91Api], keeps a small in-memory *page* cache
 /// (list pages) and a disk *direct-link* cache (resolved media URLs, valid
 /// until the signed URL's `e=` expiry).
@@ -59,36 +69,33 @@ class VideoRepository {
     return _dateOf(r.items.first.viewKey);
   }
 
-  /// BINARY-SEARCH the category page whose newest item is closest to (at/older
-  /// than) [target]. Pages run roughly newest→oldest, so this is approximate;
-  /// the resulting page's real date is shown to the user. Costs ~log2(pages)
-  /// page fetches + detail-date lookups.
-  Future<int> seekPageForDate(String category, DateTime target,
-      {int fallbackMaxPage = 800}) async {
-    final first = await this.category(category, 1);
-    var maxPage = first.totalPage > 0 ? first.totalPage : fallbackMaxPage;
-    if (maxPage < 1) maxPage = 1;
-    var lo = 1, hi = maxPage, best = 1;
-    var found = false;
-    var steps = 0;
-    while (lo <= hi && steps < 24) {
-      steps++;
-      final mid = (lo + hi) ~/ 2;
-      final d = await firstItemDate(category, mid);
-      if (d == null) {
-        hi = mid - 1;
-        continue;
+  /// Find the first category page whose newest item is at/older than [target].
+  ///
+  /// We LINEAR-SCAN from page 1 (not binary search): the date is only coarse
+  /// per page and older pages are a huge "same date" plateau, so binary search
+  /// lands on a wrong deep page. For a chronological category the boundary is
+  /// within the first ~dozen pages for the recent ~2 weeks, so a bounded linear
+  /// scan is both accurate and cheap. Returns [matched]=false when the target
+  /// is older than anything reachable within [maxScan] pages (caller shows the
+  /// earliest available date).
+  Future<DateSeekResult> seekPageForDate(String category, DateTime target,
+      {int maxScan = 40}) async {
+    final tMid = DateTime(target.year, target.month, target.day);
+    DateTime? lastDate;
+    var lastPageWithItems = 1;
+    for (var p = 1; p <= maxScan; p++) {
+      final r = await this.category(category, p);
+      if (r.items.isEmpty) break;
+      lastPageWithItems = p;
+      final d = await _dateOf(r.items.first.viewKey);
+      if (d == null) continue;
+      lastDate = d;
+      if (d.isAfter(tMid)) {
+        continue; // still newer than target -> go deeper
       }
-      if (d.isAfter(DateTime(target.year, target.month, target.day))) {
-        // Page is newer than target -> go to older pages (larger index).
-        lo = mid + 1;
-      } else {
-        best = mid;
-        found = true;
-        hi = mid - 1;
-      }
+      return DateSeekResult(page: p, pageDate: d, matched: true);
     }
-    return found ? best : maxPage;
+    return DateSeekResult(page: lastPageWithItems, pageDate: lastDate, matched: false);
   }
 
   /// Resolve a playable source, using the disk cache while the signed URL is

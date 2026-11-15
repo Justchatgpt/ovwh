@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/constants.dart';
 import '../../data/models/video_item.dart';
 import '../../data/repositories/video_repository.dart';
 import '../../shared/widgets/status_view.dart';
@@ -9,9 +8,12 @@ import '../../shared/widgets/video_card.dart';
 import '../../shared/widgets/video_grid.dart';
 import '../detail/detail_page.dart';
 
-/// "Filter by publish date" → pick a category + date, locate the closest list
-/// page (real date read from detail pages, since the list hides it), then let
-/// the user browse that page and step ±1 page.
+/// "Filter by publish date" → pick a date, jump to the list page whose real
+/// publish date first reaches that day, then browse it (prev/next page).
+///
+/// Only the chronological category「最近更新(rf)」is offered here: the other
+/// categories are sorted by popularity/duration, NOT by time, so a date seek
+/// on them is meaningless.
 class TimeFilterPage extends StatefulWidget {
   const TimeFilterPage({super.key});
 
@@ -20,16 +22,17 @@ class TimeFilterPage extends StatefulWidget {
 }
 
 class _TimeFilterPageState extends State<TimeFilterPage> {
-  String _category = 'rf';
-  DateTime _date = DateTime.now();
+  static const String _category = 'rf';
 
+  DateTime _date = DateTime.now();
   bool _loading = false;
   String _status = '';
   String? _error;
   int _page = 1;
-  int? _pageDate; // ms epoch of page's newest item date
+  DateTime? _pageDate;
   List<VideoItem> _items = <VideoItem>[];
   bool _started = false;
+  bool _notFound = false;
 
   static String _fmt(DateTime? d) => d == null
       ? '未知'
@@ -46,6 +49,11 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     if (picked != null) setState(() => _date = picked);
   }
 
+  Future<void> _quick(int daysAgo) async {
+    setState(() => _date = DateTime.now().subtract(Duration(days: daysAgo)));
+    await _seek();
+  }
+
   Future<void> _seek() async {
     final repo = context.read<VideoRepository>();
     setState(() {
@@ -55,16 +63,17 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       _status = '正在按日期定位…';
       _items = <VideoItem>[];
       _pageDate = null;
+      _notFound = false;
     });
     try {
-      final page = await repo.seekPageForDate(_category, _date);
-      final pr = await repo.category(_category, page);
-      final d = await repo.firstItemDate(_category, page);
+      final res = await repo.seekPageForDate(_category, _date);
+      final pr = await repo.category(_category, res.page);
       if (!mounted) return;
       setState(() {
-        _page = page;
-        _pageDate = d?.millisecondsSinceEpoch;
+        _page = res.page;
+        _pageDate = res.pageDate;
         _items = _dedupe(pr.items);
+        _notFound = !res.matched;
         _loading = false;
       });
     } catch (e) {
@@ -83,6 +92,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       _loading = true;
       _error = null;
       _status = '加载第 $page 页…';
+      _notFound = false;
     });
     try {
       final pr = await repo.category(_category, page);
@@ -90,7 +100,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       if (!mounted) return;
       setState(() {
         _page = page;
-        _pageDate = d?.millisecondsSinceEpoch;
+        _pageDate = d;
         _items = _dedupe(pr.items);
         _loading = false;
       });
@@ -120,12 +130,11 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
 
   @override
   Widget build(BuildContext context) {
-    final entries = ApiConstants.categories.entries.toList();
     return Scaffold(
       appBar: AppBar(title: const Text('按发布时间筛选')),
       body: Column(
         children: [
-          _controls(entries),
+          _controls(),
           const Divider(height: 1),
           Expanded(child: _content()),
         ],
@@ -133,27 +142,21 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     );
   }
 
-  Widget _controls(List<MapEntry<String, String>> entries) {
+  Widget _controls() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 40,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: entries.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, i) {
-                final e = entries[i];
-                return ChoiceChip(
-                  label: Text(e.value),
-                  selected: _category == e.key,
-                  onSelected: (_) => setState(() => _category = e.key),
-                );
-              },
-            ),
+          Row(
+            children: [
+              const Icon(Icons.schedule, size: 16, color: Colors.white60),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text('分类：最近更新（仅此分类按发布时间排序）',
+                    style: TextStyle(fontSize: 12, color: Colors.white60)),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Row(
@@ -169,6 +172,15 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
                 icon: const Icon(Icons.south_east),
                 label: const Text('跳转'),
               ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              ActionChip(label: const Text('今天'), onPressed: _loading ? null : () => _quick(0)),
+              ActionChip(label: const Text('3天前'), onPressed: _loading ? null : () => _quick(3)),
+              ActionChip(label: const Text('7天前'), onPressed: _loading ? null : () => _quick(7)),
             ],
           ),
         ],
@@ -193,37 +205,41 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       return StatusView(error: _error, onRetry: _started ? _seek : null);
     }
     if (!_started) {
-      return const StatusView(empty: true, emptyText: '选择分类和日期，点“跳转”定位');
-    }
-    if (_items.isEmpty) {
-      return Column(
-        children: [
-          Expanded(child: const StatusView(empty: true, emptyText: '该页没有内容，可换日期或返回')),
-          _pager(),
-        ],
-      );
+      return const StatusView(empty: true, emptyText: '选择日期，点“跳转”定位');
     }
     return Column(
       children: [
+        if (_notFound) _banner(),
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            gridDelegate: videoGridDelegate,
-            itemCount: _items.length,
-            itemBuilder: (context, i) {
-              final item = _items[i];
-              return VideoCard(item: item, onTap: () => openDetail(context, item));
-            },
-          ),
+          child: _items.isEmpty
+              ? const StatusView(empty: true, emptyText: '该页没有内容，可换日期或返回')
+              : GridView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  gridDelegate: videoGridDelegate,
+                  itemCount: _items.length,
+                  itemBuilder: (context, i) {
+                    final item = _items[i];
+                    return VideoCard(item: item, onTap: () => openDetail(context, item));
+                  },
+                ),
         ),
         _pager(),
       ],
     );
   }
 
+  Widget _banner() {
+    return Container(
+      width: double.infinity,
+      color: Colors.amber.withOpacity(0.15),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Text('所选日期早于现有内容，已定位到可获取的最早一页（约 ${_fmt(_pageDate)}）',
+          style: const TextStyle(fontSize: 12, color: Colors.amber)),
+    );
+  }
+
   Widget _pager() {
     final scheme = Theme.of(context).colorScheme;
-    final d = _pageDate == null ? null : DateTime.fromMillisecondsSinceEpoch(_pageDate!);
     return SafeArea(
       top: false,
       child: Container(
@@ -235,17 +251,17 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             IconButton(
-              tooltip: '上一页',
+              tooltip: '上一页（更新）',
               onPressed: _page > 1 ? () => _gotoPage(_page - 1) : null,
               icon: const Icon(Icons.chevron_left),
             ),
             Flexible(
-              child: Text('第 $_page 页 · 约 ${_fmt(d)}',
+              child: Text('第 $_page 页 · 约 ${_fmt(_pageDate)}',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13)),
             ),
             IconButton(
-              tooltip: '下一页',
+              tooltip: '下一页（更早）',
               onPressed: () => _gotoPage(_page + 1),
               icon: const Icon(Icons.chevron_right),
             ),
