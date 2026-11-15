@@ -50,6 +50,21 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     await _run(1);
   }
 
+  bool get _canNextDay {
+    final tomorrow = DateTime(_date.year, _date.month, _date.day).add(const Duration(days: 1));
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    return !tomorrow.isAfter(today);
+  }
+
+  Future<void> _shiftDay(int delta) async {
+    if (_loading) return;
+    final nd = DateTime(_date.year, _date.month, _date.day).add(Duration(days: delta));
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    if (nd.isAfter(today)) return;
+    setState(() => _date = nd);
+    await _run(1);
+  }
+
   Future<void> _run(int page) async {
     final repo = context.read<VideoRepository>();
     setState(() {
@@ -77,8 +92,8 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   }
 
   bool get _canNext {
-    final t = _totalPages;
-    if (t != null) return _page < t;
+    // Allow going further as long as the current page had results, so a wrong
+    // total never blocks paging. Stops naturally on an empty page.
     return _items.isNotEmpty;
   }
 
@@ -140,6 +155,22 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
                 onPressed: _loading ? null : () => _run(1),
                 icon: const Icon(Icons.search),
                 label: const Text('检索'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _loading ? null : () => _shiftDay(-1),
+                icon: const Icon(Icons.chevron_left),
+                label: const Text('前一天'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: (_loading || !_canNextDay) ? null : () => _shiftDay(1),
+                icon: const Icon(Icons.chevron_right),
+                label: const Text('后一天'),
               ),
             ],
           ),
