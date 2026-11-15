@@ -292,12 +292,43 @@ class P91Api {
     return fetchCategory('rf', 1);
   }
 
+  /// Which search URL template last returned results (avoids re-probing).
+  String? _searchTemplate;
+
+  /// Live 91 search form (same CMS) is `GET search_result.php` with just
+  /// `search_id`, `page`, hidden `category`, optional `min_duration` — NOT the
+  /// old `search_type=search_videos`. The result page markup may also differ
+  /// from the normal list. So we try several param shapes and keep the first
+  /// that yields any item; the parser also has a generic anchor fallback.
   Future<PagedResult> search(String keyword, int page) async {
-    if (keyword.trim().isEmpty) return PagedResult.empty;
-    final kw = Uri.encodeComponent(keyword.trim());
-    final html = await _getPage(
-        '/search_result.php?search_id=$kw&search_type=search_videos&viewtype=basic&page=$page');
-    return _toPaged(html, page);
+    final q = keyword.trim();
+    if (q.isEmpty) return PagedResult.empty;
+    final kw = Uri.encodeComponent(q);
+    final templates = <String>[
+      if (_searchTemplate != null) _searchTemplate!,
+      '/search_result.php?search_id=__KW__&category=rf&viewtype=basic&page=__PG__&min_duration=',
+      '/search_result.php?search_id=__KW__&search_type=search_videos&category=rf&viewtype=basic&page=__PG__&min_duration=',
+      '/search_result.php?search_id=__KW__&search_type=search_videos&viewtype=basic&page=__PG__',
+      '/search_result.php?search_id=__KW__&category=rf&viewtype=basic&page=__PG__',
+      '/search_result.php?search_id=__KW__&viewtype=basic&page=__PG__',
+      '/search_result.php?search_id=__KW__&page=__PG__',
+    ];
+    final tried = <String>{};
+    for (final tpl in templates) {
+      if (!tried.add(tpl)) continue;
+      final path = tpl.replaceAll('__KW__', kw).replaceAll('__PG__', '$page');
+      try {
+        final html = await _getPage(path);
+        final r = _toPaged(html, page);
+        if (r.items.isNotEmpty) {
+          _searchTemplate = tpl;
+          return r;
+        }
+      } catch (_) {
+        // try next shape
+      }
+    }
+    return PagedResult.empty;
   }
 
   Future<VideoItem> fetchDetail(String viewKey) async {

@@ -45,7 +45,46 @@ class P91Parser {
     List<VideoItem> raw = _parseModernCards(doc);
     if (raw.isEmpty) raw = _parseLegacyList(doc);
     if (raw.isEmpty) raw = _parseCardRegExp(html);
+    if (raw.isEmpty) raw = _parseGenericAnchors(html);
     return _dedupeByContent(raw);
+  }
+
+  /// Last-resort parser: any `<a href=...viewkey=XX...>` with an inner img /
+  /// title / duration. Handles search-result and other page variants whose
+  /// container class differs from the standard list.
+  static List<VideoItem> _parseGenericAnchors(String html) {
+    final out = <VideoItem>[];
+    final anchorRe = RegExp(
+        r'<a\b[^>]*href="[^"]*viewkey=([a-z0-9]+)[^"]*"[^>]*>([\s\S]{0,1500}?)</a>',
+        caseSensitive: false);
+    final imgRe = RegExp(r'<img[^>]+src="([^"]+)"', caseSensitive: false);
+    final titleRe = RegExp(
+        r'<span[^>]*class="[^"]*video-title[^"]*"[^>]*>([\s\S]*?)</span>',
+        caseSensitive: false);
+    final durRe = RegExp(
+        r'<span[^>]*class="[^"]*duration[^"]*"[^>]*>\s*([\d:]+)',
+        caseSensitive: false);
+    for (final m in anchorRe.allMatches(html)) {
+      final vk = m.group(1)!;
+      final inner = m.group(2)!;
+      final img = imgRe.firstMatch(inner)?.group(1) ?? '';
+      var title = titleRe.firstMatch(inner)?.group(1) ?? '';
+      if (title.isEmpty) {
+        title = RegExp(r'title="([^"]+)"').firstMatch(inner)?.group(1) ?? '';
+      }
+      title = cleanTitle(title);
+      if (title.isEmpty) title = '视频 $vk';
+      final dur = durRe.firstMatch(inner)?.group(1) ?? '';
+      out.add(VideoItem(
+        viewKey: vk,
+        title: title,
+        cover: img,
+        duration: dur,
+        durationSeconds: durationToSeconds(dur),
+        pageUrl: '${ApiConstants.defaultHost}/view_video.php?viewkey=$vk',
+      ));
+    }
+    return out;
   }
 
   /// Collapse duplicate cards by BOTH `viewKey` and real video id (thumbnail
@@ -170,15 +209,33 @@ class P91Parser {
     return out;
   }
 
-  /// Try to read the total page count from a list page's pagination block.
-  /// Returns null when unknown.
+  /// Read the total page count.
+  ///
+  /// The paging block usually only renders the first ~10 page links plus the
+  /// last one is often missing, so the max anchor is unreliable (that is why
+  /// only ~10 pages were reachable). We therefore also parse the header
+  /// "视频 1 - 24 共 13610" -> ceil(13610 / 24) = 568 pages, and take the max.
   static int? parseTotalPage(String html) {
     final doc = html_parser.parse(html);
     final candidates = <int>[];
-    for (final sel in ['#paging a', '.pagination a', '.pager a']) {
+    for (final sel in ['#paging a', '.pagingnav a', '.pagination a', '.pager a']) {
       for (final a in doc.querySelectorAll(sel)) {
-        final n = int.tryParse(a.text.trim());
-        if (n != null) candidates.add(n);
+        final digits = a.text.replaceAll(RegExp(r'[^0-9]'), '');
+        final n = int.tryParse(digits);
+        if (n != null && n > 0) candidates.add(n);
+      }
+    }
+    final text = doc.text;
+    final m = RegExp(r'(\d+)\s*[-–~]\s*(\d+)\s*(?:共|of|/|总)\s*([\d,]+)',
+            caseSensitive: false)
+        .firstMatch(text);
+    if (m != null) {
+      final first = int.tryParse(m.group(1)!);
+      final last = int.tryParse(m.group(2)!);
+      final totalItems = int.tryParse(m.group(3)!.replaceAll(',', ''));
+      if (first != null && last != null && totalItems != null && last >= first) {
+        final perPage = last - first + 1;
+        if (perPage > 0) candidates.add((totalItems / perPage).ceil());
       }
     }
     if (candidates.isEmpty) return null;
