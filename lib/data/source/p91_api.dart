@@ -336,6 +336,12 @@ class P91Api {
     return P91Parser.parseDetail(html, viewKey);
   }
 
+  /// Real publish date (yyyy-MM-dd) from a detail page; null if unavailable.
+  Future<DateTime?> publishDate(String viewKey) async {
+    final html = await _getPage('/view_video.php?viewkey=$viewKey');
+    return P91Parser.parsePublishDate(html);
+  }
+
   /// Resolve a signed, directly playable URL — with the daily-10 bypass loop.
   /// The signature is one-shot, so this is always called fresh at play time.
   Future<ResolvedSource> resolveSource(String viewKey) async {

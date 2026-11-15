@@ -266,6 +266,23 @@ class P91Parser {
   // Detail parsing
   // ---------------------------------------------------------------------------
 
+  /// Extract the real publish date from a detail page. 91 renders it plainly in
+  /// `<span class="title-yakov">2026-11-13</span>` (the list page hides it with
+  /// a font-obfuscation, that's why we read it from detail).
+  static DateTime? parsePublishDate(String html) {
+    final m = RegExp(
+            r'<span[^>]*class="[^"]*title-yakov[^"]*"[^>]*>\s*(20\d\d-\d\d-\d\d)')
+        .firstMatch(html);
+    if (m != null) return DateTime.tryParse(m.group(1)!);
+    for (final mm in RegExp(r'20\d\d-\d\d-\d\d').allMatches(html)) {
+      final s = mm.group(0)!;
+      if (s == '2015-09-02') continue; // site launch date in the category select
+      final d = DateTime.tryParse(s);
+      if (d != null) return d;
+    }
+    return null;
+  }
+
   /// Parse title / cover / owner from a detail page.
   static VideoItem parseDetail(String html, String viewKey) {
     final doc = html_parser.parse(html);

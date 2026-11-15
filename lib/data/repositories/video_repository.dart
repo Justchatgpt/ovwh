@@ -43,6 +43,54 @@ class VideoRepository {
 
   Future<VideoItem> detail(String viewKey) => api.fetchDetail(viewKey);
 
+  final Map<String, DateTime?> _dateCache = <String, DateTime?>{};
+
+  Future<DateTime?> _dateOf(String viewKey) async {
+    if (_dateCache.containsKey(viewKey)) return _dateCache[viewKey];
+    final d = await api.publishDate(viewKey);
+    _dateCache[viewKey] = d;
+    return d;
+  }
+
+  /// Publish date of the first (newest) item on a category page.
+  Future<DateTime?> firstItemDate(String category, int page) async {
+    final r = await category(category, page);
+    if (r.items.isEmpty) return null;
+    return _dateOf(r.items.first.viewKey);
+  }
+
+  /// BINARY-SEARCH the category page whose newest item is closest to (at/older
+  /// than) [target]. Pages run roughly newest→oldest, so this is approximate;
+  /// the resulting page's real date is shown to the user. Costs ~log2(pages)
+  /// page fetches + detail-date lookups.
+  Future<int> seekPageForDate(String category, DateTime target,
+      {int fallbackMaxPage = 800}) async {
+    final first = await category(category, 1);
+    var maxPage = first.totalPage > 0 ? first.totalPage : fallbackMaxPage;
+    if (maxPage < 1) maxPage = 1;
+    var lo = 1, hi = maxPage, best = 1;
+    var found = false;
+    var steps = 0;
+    while (lo <= hi && steps < 24) {
+      steps++;
+      final mid = (lo + hi) ~/ 2;
+      final d = await firstItemDate(category, mid);
+      if (d == null) {
+        hi = mid - 1;
+        continue;
+      }
+      if (d.isAfter(DateTime(target.year, target.month, target.day))) {
+        // Page is newer than target -> go to older pages (larger index).
+        lo = mid + 1;
+      } else {
+        best = mid;
+        found = true;
+        hi = mid - 1;
+      }
+    }
+    return found ? best : maxPage;
+  }
+
   /// Resolve a playable source, using the disk cache while the signed URL is
   /// still valid. `forceRefresh: true` bypasses the cache (e.g. user tap "重试"
   /// after playback failed with 403).

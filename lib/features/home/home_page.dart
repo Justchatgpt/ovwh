@@ -6,6 +6,7 @@ import '../../data/repositories/video_repository.dart';
 import '../../shared/widgets/paged_video_browser.dart';
 import '../detail/detail_page.dart';
 import '../search/search_page.dart';
+import '../timefilter/time_filter_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -25,6 +26,13 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('P91', style: TextStyle(fontWeight: FontWeight.w800)),
         actions: [
+          IconButton(
+            tooltip: '按发布时间筛选',
+            icon: const Icon(Icons.calendar_month),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const TimeFilterPage()),
+            ),
+          ),
           IconButton(
             tooltip: '刷新',
             icon: const Icon(Icons.refresh),
