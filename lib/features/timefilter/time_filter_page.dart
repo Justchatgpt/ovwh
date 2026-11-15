@@ -177,10 +177,13 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
           const SizedBox(height: 6),
           Wrap(
             spacing: 8,
+            runSpacing: 4,
             children: [
               ActionChip(label: const Text('今天'), onPressed: _loading ? null : () => _quick(0)),
               ActionChip(label: const Text('3天前'), onPressed: _loading ? null : () => _quick(3)),
               ActionChip(label: const Text('7天前'), onPressed: _loading ? null : () => _quick(7)),
+              ActionChip(label: const Text('一年前'), onPressed: _loading ? null : () => _quick(365)),
+              ActionChip(label: const Text('两年前'), onPressed: _loading ? null : () => _quick(730)),
             ],
           ),
         ],
@@ -233,7 +236,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       width: double.infinity,
       color: Colors.amber.withOpacity(0.15),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Text('所选日期早于现有内容，已定位到可获取的最早一页（约 ${_fmt(_pageDate)}）',
+      child: Text('所选日期早于「最近更新」可回溯的范围，已定位到最早一页（约 ${_fmt(_pageDate)}）',
           style: const TextStyle(fontSize: 12, color: Colors.amber)),
     );
   }

@@ -79,7 +79,7 @@ class VideoRepository {
   /// is older than anything reachable within [maxScan] pages (caller shows the
   /// earliest available date).
   Future<DateSeekResult> seekPageForDate(String category, DateTime target,
-      {int maxScan = 40}) async {
+      {int maxScan = 20}) async {
     final tMid = DateTime(target.year, target.month, target.day);
     DateTime? lastDate;
     var lastPageWithItems = 1;
