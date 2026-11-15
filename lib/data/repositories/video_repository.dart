@@ -51,6 +51,10 @@ class VideoRepository {
   Future<PagedResult> search(String keyword, int page) =>
       api.search(keyword, page);
 
+  /// Browse the archive by publish date (works for any historical date).
+  Future<PagedResult> searchByDate(DateTime date, int page) =>
+      api.searchByDate(date, page);
+
   Future<VideoItem> detail(String viewKey) => api.fetchDetail(viewKey);
 
   final Map<String, DateTime?> _dateCache = <String, DateTime?>{};

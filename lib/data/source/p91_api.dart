@@ -297,9 +297,7 @@ class P91Api {
 
   /// Live 91 search form (same CMS) is `GET search_result.php` with just
   /// `search_id`, `page`, hidden `category`, optional `min_duration` — NOT the
-  /// old `search_type=search_videos`. The result page markup may also differ
-  /// from the normal list. So we try several param shapes and keep the first
-  /// that yields any item; the parser also has a generic anchor fallback.
+  /// old `search_type=search_videos`. Try several param shapes, keep first hit.
   Future<PagedResult> search(String keyword, int page) async {
     final q = keyword.trim();
     if (q.isEmpty) return PagedResult.empty;
@@ -334,6 +332,17 @@ class P91Api {
   Future<VideoItem> fetchDetail(String viewKey) async {
     final html = await _getPage('/view_video.php?viewkey=$viewKey');
     return P91Parser.parseDetail(html, viewKey);
+  }
+
+  /// Browse videos by publish DATE across the whole archive:
+  /// `search_result.php?search_type=date&search_id=YYYY-MM-DD&page=N`.
+  Future<PagedResult> searchByDate(DateTime date, int page) async {
+    final s = '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+    final html = await _getPage(
+        '/search_result.php?search_type=date&search_id=$s&viewtype=basic&page=$page');
+    return _toPaged(html, page);
   }
 
   /// Real publish date (yyyy-MM-dd) from a detail page; null if unavailable.

@@ -8,12 +8,9 @@ import '../../shared/widgets/video_card.dart';
 import '../../shared/widgets/video_grid.dart';
 import '../detail/detail_page.dart';
 
-/// "Filter by publish date" → pick a date, jump to the list page whose real
-/// publish date first reaches that day, then browse it (prev/next page).
-///
-/// Only the chronological category「最近更新(rf)」is offered here: the other
-/// categories are sorted by popularity/duration, NOT by time, so a date seek
-/// on them is meaningless.
+/// "Filter by publish date" → browse the WHOLE archive for a chosen day via
+/// `search_result.php?search_type=date`, which works for any historical date
+/// (one year / two years ago included). Supports paging within that day.
 class TimeFilterPage extends StatefulWidget {
   const TimeFilterPage({super.key});
 
@@ -22,21 +19,17 @@ class TimeFilterPage extends StatefulWidget {
 }
 
 class _TimeFilterPageState extends State<TimeFilterPage> {
-  static const String _category = 'rf';
-
   DateTime _date = DateTime.now();
   bool _loading = false;
   String _status = '';
   String? _error;
   int _page = 1;
-  DateTime? _pageDate;
+  int? _totalPages;
   List<VideoItem> _items = <VideoItem>[];
   bool _started = false;
-  bool _notFound = false;
 
-  static String _fmt(DateTime? d) => d == null
-      ? '未知'
-      : '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  static String _fmt(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
@@ -46,34 +39,32 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       lastDate: DateTime.now(),
       helpText: '选择发布日期',
     );
-    if (picked != null) setState(() => _date = picked);
+    if (picked != null) {
+      setState(() => _date = picked);
+      await _run(1);
+    }
   }
 
   Future<void> _quick(int daysAgo) async {
     setState(() => _date = DateTime.now().subtract(Duration(days: daysAgo)));
-    await _seek();
+    await _run(1);
   }
 
-  Future<void> _seek() async {
+  Future<void> _run(int page) async {
     final repo = context.read<VideoRepository>();
     setState(() {
       _loading = true;
       _error = null;
       _started = true;
-      _status = '正在按日期定位…';
-      _items = <VideoItem>[];
-      _pageDate = null;
-      _notFound = false;
+      _status = '正在检索 ${_fmt(_date)} 的视频…';
     });
     try {
-      final res = await repo.seekPageForDate(_category, _date);
-      final pr = await repo.category(_category, res.page);
+      final pr = await repo.searchByDate(_date, page);
       if (!mounted) return;
       setState(() {
-        _page = res.page;
-        _pageDate = res.pageDate;
+        _page = page;
         _items = _dedupe(pr.items);
-        _notFound = !res.matched;
+        _totalPages = pr.totalPage > 0 ? pr.totalPage : null;
         _loading = false;
       });
     } catch (e) {
@@ -85,32 +76,10 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     }
   }
 
-  Future<void> _gotoPage(int page) async {
-    if (page < 1) return;
-    final repo = context.read<VideoRepository>();
-    setState(() {
-      _loading = true;
-      _error = null;
-      _status = '加载第 $page 页…';
-      _notFound = false;
-    });
-    try {
-      final pr = await repo.category(_category, page);
-      final d = await repo.firstItemDate(_category, page);
-      if (!mounted) return;
-      setState(() {
-        _page = page;
-        _pageDate = d;
-        _items = _dedupe(pr.items);
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
-    }
+  bool get _canNext {
+    final t = _totalPages;
+    if (t != null) return _page < t;
+    return _items.isNotEmpty;
   }
 
   List<VideoItem> _dedupe(List<VideoItem> items) {
@@ -150,10 +119,10 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
         children: [
           Row(
             children: [
-              const Icon(Icons.schedule, size: 16, color: Colors.white60),
+              const Icon(Icons.event_available, size: 16, color: Colors.white60),
               const SizedBox(width: 6),
               Expanded(
-                child: Text('分类：最近更新（仅此分类按发布时间排序）',
+                child: Text('按发布日期检索全站历史（支持任意较早日期）',
                     style: TextStyle(fontSize: 12, color: Colors.white60)),
               ),
             ],
@@ -162,15 +131,15 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
           Row(
             children: [
               OutlinedButton.icon(
-                onPressed: _pickDate,
+                onPressed: _loading ? null : _pickDate,
                 icon: const Icon(Icons.event),
                 label: Text(_fmt(_date)),
               ),
               const SizedBox(width: 12),
               FilledButton.icon(
-                onPressed: _loading ? null : _seek,
-                icon: const Icon(Icons.south_east),
-                label: const Text('跳转'),
+                onPressed: _loading ? null : () => _run(1),
+                icon: const Icon(Icons.search),
+                label: const Text('检索'),
               ),
             ],
           ),
@@ -205,17 +174,19 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       );
     }
     if (_error != null) {
-      return StatusView(error: _error, onRetry: _started ? _seek : null);
+      return StatusView(error: _error, onRetry: () => _run(_page));
     }
     if (!_started) {
-      return const StatusView(empty: true, emptyText: '选择日期，点“跳转”定位');
+      return const StatusView(empty: true, emptyText: '选择日期，点“检索”查看该日视频');
+    }
+    if (_items.isEmpty && _page == 1) {
+      return const StatusView(empty: true, emptyText: '该日期没有视频，换个日期试试');
     }
     return Column(
       children: [
-        if (_notFound) _banner(),
         Expanded(
           child: _items.isEmpty
-              ? const StatusView(empty: true, emptyText: '该页没有内容，可换日期或返回')
+              ? const StatusView(empty: true, emptyText: '没有更多内容了，可返回上一页')
               : GridView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                   gridDelegate: videoGridDelegate,
@@ -231,22 +202,13 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     );
   }
 
-  Widget _banner() {
-    return Container(
-      width: double.infinity,
-      color: Colors.amber.withOpacity(0.15),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Text('所选日期早于「最近更新」可回溯的范围，已定位到最早一页（约 ${_fmt(_pageDate)}）',
-          style: const TextStyle(fontSize: 12, color: Colors.amber)),
-    );
-  }
-
   Widget _pager() {
     final scheme = Theme.of(context).colorScheme;
+    final totalPart = _totalPages != null ? ' / $_totalPages' : '';
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         decoration: BoxDecoration(
           border: Border(top: BorderSide(color: scheme.outlineVariant.withOpacity(0.4))),
         ),
@@ -254,18 +216,18 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             IconButton(
-              tooltip: '上一页（更新）',
-              onPressed: _page > 1 ? () => _gotoPage(_page - 1) : null,
+              tooltip: '上一页',
+              onPressed: _page > 1 ? () => _run(_page - 1) : null,
               icon: const Icon(Icons.chevron_left),
             ),
             Flexible(
-              child: Text('第 $_page 页 · 约 ${_fmt(_pageDate)}',
+              child: Text('${_fmt(_date)} · 第 $_page$totalPart 页 · 本页 ${_items.length} 个',
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13)),
+                  style: const TextStyle(fontSize: 12)),
             ),
             IconButton(
-              tooltip: '下一页（更早）',
-              onPressed: () => _gotoPage(_page + 1),
+              tooltip: '下一页',
+              onPressed: _canNext ? () => _run(_page + 1) : null,
               icon: const Icon(Icons.chevron_right),
             ),
           ],
