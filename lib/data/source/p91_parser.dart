@@ -223,7 +223,7 @@ class P91Parser {
         final digits = a.text.replaceAll(RegExp(r'[^0-9]'), '');
         final n = int.tryParse(digits);
         if (n != null && n > 0) {
-          anchorMax = (anchorMax == null || n > anchorMax) ? n : anchorMax;
+          anchorMax = (n > (anchorMax ?? 0)) ? n : anchorMax;
         }
       }
     }
