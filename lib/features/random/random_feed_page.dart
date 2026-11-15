@@ -7,13 +7,13 @@ import 'package:video_player/video_player.dart';
 import '../../data/models/video_item.dart';
 import '../../data/repositories/video_repository.dart';
 
-/// A full-screen "random" feed: on entry it plays a random video, and swiping
-/// up/down plays another random one. The random pool is the 「评论最多」(md)
-/// category, so picked videos have many comments.
+/// Full-screen "random" feed: plays a random video on entry; swiping up/down
+/// plays another. TRUE random across the whole archive — a random DATE between
+/// the site launch (2015-09-02) and today, then a random video from that day.
 class RandomFeedPage extends StatefulWidget {
   const RandomFeedPage({super.key, this.isActive = true});
 
-  /// Whether this tab is currently visible (pause playback when switched away).
+  /// Whether this tab is visible (pause when switched away).
   final bool isActive;
 
   @override
@@ -25,13 +25,13 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   final Random _rnd = Random();
   final List<VideoItem> _items = <VideoItem>[];
   final Set<String> _seen = <String>{};
+  final Map<String, Future<ResolvedSource>> _srcFutures = <String, Future<ResolvedSource>>{};
 
   int _index = 0;
   bool _bootstrapping = true;
   bool _loadingMore = false;
   String? _error;
 
-  /// Earliest archive date (91 launched 2015-09-02).
   static final DateTime _archiveStart = DateTime(2015, 9, 2);
 
   @override
@@ -40,10 +40,6 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
-  /// TRUE random across the whole archive: pick a RANDOM DATE between the site
-  /// launch (2015-09-02) and today, pull that day's videos (date search covers
-  /// all years, old ones included), and pick a random one. Empty days are
-  /// retried so we keep sampling until we hit a day that has videos.
   Future<VideoItem?> _pick() async {
     final repo = context.read<VideoRepository>();
     final today = DateTime.now();
@@ -66,6 +62,13 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     return null;
   }
 
+  /// Resolve the direct URL in the background so playback starts fast.
+  void _prefetch(VideoItem it) {
+    if (_srcFutures.containsKey(it.viewKey)) return;
+    final repo = context.read<VideoRepository>();
+    _srcFutures[it.viewKey] = repo.resolve(it.viewKey);
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _bootstrapping = true;
@@ -80,6 +83,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
       });
       return;
     }
+    _prefetch(first);
     setState(() {
       _items.add(first);
       _bootstrapping = false;
@@ -87,13 +91,14 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     _loadMore();
   }
 
-  Future<void> _loadMore({int count = 3}) async {
+  Future<void> _loadMore({int count = 2}) async {
     if (_loadingMore) return;
     _loadingMore = true;
     try {
       for (var i = 0; i < count; i++) {
         final it = await _pick();
         if (it != null && mounted) {
+          _prefetch(it);
           setState(() => _items.add(it));
         }
       }
@@ -104,7 +109,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
 
   void _onPageChanged(int i) {
     setState(() => _index = i);
-    if (i >= _items.length - 2) _loadMore();
+    if (i >= _items.length - 2) _loadMore(count: 3);
   }
 
   @override
@@ -151,8 +156,8 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
           return _RandomVideoSlide(
             item: item,
             active: widget.isActive && i == _index,
+            source: _srcFutures[item.viewKey],
             resolve: (vk) => repo.resolve(vk),
-            onNext: () => _pc.nextPage(duration: const Duration(milliseconds: 250), curve: Curves.easeInOut),
           );
         },
       ),
@@ -165,13 +170,13 @@ class _RandomVideoSlide extends StatefulWidget {
     required this.item,
     required this.active,
     required this.resolve,
-    required this.onNext,
+    this.source,
   });
 
   final VideoItem item;
   final bool active;
   final Future<ResolvedSource> Function(String viewKey) resolve;
-  final VoidCallback onNext;
+  final Future<ResolvedSource>? source;
 
   @override
   State<_RandomVideoSlide> createState() => _RandomVideoSlideState();
@@ -182,6 +187,7 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
   bool _requested = false;
   bool _ready = false;
   String? _err;
+  int _lastTickMs = 0;
 
   @override
   void initState() {
@@ -200,11 +206,19 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
     }
   }
 
+  void _onTick() {
+    if (!mounted) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastTickMs < 300) return;
+    _lastTickMs = now;
+    setState(() {});
+  }
+
   Future<void> _ensureLoaded() async {
     if (_requested) return;
     _requested = true;
     try {
-      final src = await widget.resolve(widget.item.viewKey);
+      final src = await (widget.source ?? widget.resolve(widget.item.viewKey));
       final c = VideoPlayerController.networkUrl(
         Uri.parse(src.url),
         httpHeaders: src.headers,
@@ -216,6 +230,7 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
         return;
       }
       _c = c;
+      c.addListener(_onTick);
       setState(() => _ready = true);
       if (widget.active) c.play();
     } catch (e) {
@@ -234,24 +249,32 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
     setState(() {});
   }
 
+  static String _fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return h > 0 ? '$h:$m:$s' : '$m:$s';
+  }
+
   @override
   void dispose() {
+    _c?.removeListener(_onTick);
     _c?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final ready = _ready && _c != null;
     return GestureDetector(
       onTap: _toggle,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Cover as background placeholder.
           if (widget.item.cover.isNotEmpty)
             Image.network(widget.item.cover, fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => const ColoredBox(color: Colors.black)),
-          if (_ready && _c != null)
+          if (ready)
             Center(
               child: AspectRatio(
                 aspectRatio: _c!.value.aspectRatio == 0 ? 9 / 16 : _c!.value.aspectRatio,
@@ -260,6 +283,8 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
             )
           else
             const Center(child: CircularProgressIndicator()),
+          if (ready && !_c!.value.isPlaying)
+            const Center(child: Icon(Icons.play_arrow_rounded, size: 72, color: Colors.white70)),
           if (_err != null)
             Center(
               child: Padding(
@@ -268,11 +293,10 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
                     style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
               ),
             ),
-          // Bottom gradient + title.
           Positioned(
             left: 0, right: 0, bottom: 0,
             child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 40, 16, 20),
+              padding: const EdgeInsets.fromLTRB(8, 30, 8, 16),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter, end: Alignment.bottomCenter,
@@ -283,15 +307,49 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    widget.item.title,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                  if (ready) ...[
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: _toggle,
+                          icon: Icon(_c!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                              color: Colors.white),
+                        ),
+                        Expanded(
+                          child: VideoProgressIndicator(
+                            _c!,
+                            allowScrubbing: true,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            colors: VideoProgressColors(
+                              playedColor: Colors.white,
+                              bufferedColor: Colors.white30,
+                              backgroundColor: Colors.white12,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12, bottom: 4),
+                      child: Text('${_fmt(_c!.value.position)} / ${_fmt(_c!.value.duration)}',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                    ),
+                  ],
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      widget.item.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
                   ),
-                  const SizedBox(height: 6),
-                  const Text('上滑 / 下滑 换一个随机视频 · 点击暂停',
-                      style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 8, top: 6),
+                    child: Text('上滑 / 下滑 换一个随机视频 · 点击暂停',
+                        style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ),
                 ],
               ),
             ),
