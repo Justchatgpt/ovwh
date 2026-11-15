@@ -27,10 +27,12 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   final Set<String> _seen = <String>{};
 
   int _index = 0;
-  int _mdMaxPage = 0;
   bool _bootstrapping = true;
   bool _loadingMore = false;
   String? _error;
+
+  /// Earliest archive date (91 launched 2015-09-02).
+  static final DateTime _archiveStart = DateTime(2015, 9, 2);
 
   @override
   void initState() {
@@ -38,35 +40,27 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
-  Future<void> _ensureMaxPage() async {
-    if (_mdMaxPage > 0) return;
-    final repo = context.read<VideoRepository>();
-    try {
-      final pr = await repo.category('md', 1);
-      var m = pr.totalPage > 0 ? pr.totalPage : 30;
-      if (m > 80) m = 80;
-      if (m < 1) m = 1;
-      _mdMaxPage = m;
-    } catch (_) {
-      _mdMaxPage = 30;
-    }
-  }
-
+  /// TRUE random across the whole archive: pick a RANDOM DATE between the site
+  /// launch (2015-09-02) and today, pull that day's videos (date search covers
+  /// all years, old ones included), and pick a random one. Empty days are
+  /// retried so we keep sampling until we hit a day that has videos.
   Future<VideoItem?> _pick() async {
     final repo = context.read<VideoRepository>();
-    await _ensureMaxPage();
-    for (var t = 0; t < 12; t++) {
-      final page = 1 + _rnd.nextInt(_mdMaxPage <= 0 ? 1 : _mdMaxPage);
+    final today = DateTime.now();
+    final spanDays = today.difference(_archiveStart).inDays;
+    if (spanDays <= 0) return null;
+    for (var t = 0; t < 18; t++) {
+      final d = _archiveStart.add(Duration(days: _rnd.nextInt(spanDays + 1)));
       try {
-        final pr = await repo.category('md', page);
+        final pr = await repo.searchByDate(d, 1);
+        if (pr.items.isEmpty) continue;
         final cand = pr.items.where((it) => !_seen.contains(it.contentKey)).toList();
-        if (cand.isNotEmpty) {
-          final it = cand[_rnd.nextInt(cand.length)];
-          _seen.add(it.contentKey);
-          return it;
-        }
+        if (cand.isEmpty) continue;
+        final it = cand[_rnd.nextInt(cand.length)];
+        _seen.add(it.contentKey);
+        return it;
       } catch (_) {
-        // try another page
+        // try another random date
       }
     }
     return null;
