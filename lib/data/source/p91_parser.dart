@@ -217,42 +217,49 @@ class P91Parser {
   /// "视频 1 - 24 共 13610" -> ceil(13610 / 24) = 568 pages, and take the max.
   static int? parseTotalPage(String html) {
     final doc = html_parser.parse(html);
-    final candidates = <int>[];
+    int? anchorMax;
     for (final sel in ['#paging a', '.pagingnav a', '.pagination a', '.pager a']) {
       for (final a in doc.querySelectorAll(sel)) {
         final digits = a.text.replaceAll(RegExp(r'[^0-9]'), '');
         final n = int.tryParse(digits);
-        if (n != null && n > 0) candidates.add(n);
+        if (n != null && n > 0) {
+          anchorMax = (anchorMax == null || n > anchorMax) ? n : anchorMax;
+        }
       }
     }
-    final text = _listHeaderText(doc);
-    // Separator-agnostic: "1 - 24 <garbage 共> 13610" -> first,last,total.
-    // The site is GBK while its meta claims utf-8, so '共' may decode to
-    // replacement chars — never rely on the literal character.
-    final m = RegExp(r'(\d{1,5})\s*-\s*(\d{1,5})\s*[^0-9]{0,12}?(\d[\d,]{2,})')
-        .firstMatch(text);
-    if (m != null) {
-      final first = int.tryParse(m.group(1)!);
-      final last = int.tryParse(m.group(2)!);
-      final totalItems = int.tryParse(m.group(3)!.replaceAll(',', ''));
-      if (first != null &&
-          last != null &&
-          totalItems != null &&
-          last >= first &&
-          totalItems >= last) {
-        final perPage = last - first + 1;
-        if (perPage > 0) candidates.add((totalItems / perPage).ceil());
-      }
-    }
-    if (candidates.isEmpty) return null;
-    return candidates.reduce((a, b) => a > b ? a : b);
-  }
 
-  /// Prefer the "video X - Y of N" header element, else whole document text.
-  static String _listHeaderText(dom.Document doc) {
+    // Header "视频 1 - 24 共 13648" -> real total pages. GBK-safe regex.
+    int? headerPages;
     final vp = doc.querySelector('.videopaging');
-    if (vp != null && vp.text.trim().isNotEmpty) return vp.text;
-    return doc.text;
+    final headerText = (vp != null && vp.text.trim().isNotEmpty) ? vp.text : '';
+    if (headerText.isNotEmpty) {
+      final m = RegExp(r'(\d{1,5})\s*-\s*(\d{1,5})\s*[^0-9]{0,12}?(\d[\d,]{2,})')
+          .firstMatch(headerText);
+      if (m != null) {
+        final first = int.tryParse(m.group(1)!);
+        final last = int.tryParse(m.group(2)!);
+        final totalItems = int.tryParse(m.group(3)!.replaceAll(',', ''));
+        if (first != null &&
+            last != null &&
+            totalItems != null &&
+            last >= first &&
+            totalItems >= last) {
+          final perPage = last - first + 1;
+          if (perPage > 0) headerPages = (totalItems / perPage).ceil();
+        }
+      }
+    }
+
+    final paging = doc.querySelector('#paging');
+    final truncated = paging != null && paging.text.contains('..');
+
+    if (headerPages != null) {
+      return (anchorMax != null && anchorMax > headerPages) ? anchorMax : headerPages;
+    }
+    // No header total: if the pager is truncated ("1..10 »"), the anchor max is
+    // NOT the real last page -> report unknown so the UI allows going deeper.
+    if (truncated) return null;
+    return anchorMax;
   }
 
   // ---------------------------------------------------------------------------

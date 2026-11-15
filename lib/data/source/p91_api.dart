@@ -422,7 +422,8 @@ class P91Api {
 
   PagedResult _toPaged(String html, int page) {
     final items = P91Parser.parseList(html);
-    final total = P91Parser.parseTotalPage(html) ?? (items.isEmpty ? page : page + 1);
+    // 0 means "unknown" (neither paging anchors nor header total gave a value).
+    final total = P91Parser.parseTotalPage(html) ?? 0;
     return PagedResult(items: items, page: page, totalPage: total);
   }
 
