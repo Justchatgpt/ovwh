@@ -8,11 +8,12 @@ import '../../data/models/video_item.dart';
 import '../../data/repositories/video_repository.dart';
 
 /// Full-screen "random" feed: plays a random video on entry; swiping up/down
-/// plays another. TRUE random across the whole archive — a random DATE between
-/// the site launch (2015-09-02) and today, then a random video from that day.
+/// plays another. TRUE random across the whole archive.
 ///
-/// The PageView is UNBOUNDED; when you reach the edge it shows a loading slide
-/// and keeps fetching, so you can always keep swiping down.
+/// Performance: we DON'T fetch one video at a time. A single date-search returns
+/// ~24 videos for a random day; we pour all of them into a candidate pool and
+/// serve from it, refilling in the background. Direct URLs of the next few are
+/// prefetched. So most swipes need ZERO network.
 class RandomFeedPage extends StatefulWidget {
   const RandomFeedPage({super.key, this.isActive = true});
 
@@ -26,6 +27,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   final PageController _pc = PageController();
   final Random _rnd = Random();
   final List<VideoItem> _items = <VideoItem>[];
+  final List<VideoItem> _pool = <VideoItem>[];
   final Set<String> _seen = <String>{};
   final Map<String, Future<ResolvedSource>> _srcFutures = <String, Future<ResolvedSource>>{};
 
@@ -33,6 +35,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   int _target = 0;
   bool _bootstrapping = true;
   bool _loading = false;
+  bool _refilling = false;
   String? _error;
 
   static final DateTime _archiveStart = DateTime(2015, 9, 2);
@@ -43,26 +46,48 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
-  Future<VideoItem?> _pick() async {
-    final repo = context.read<VideoRepository>();
-    final today = DateTime.now();
-    final spanDays = today.difference(_archiveStart).inDays;
-    if (spanDays <= 0) return null;
-    for (var t = 0; t < 18; t++) {
-      final d = _archiveStart.add(Duration(days: _rnd.nextInt(spanDays + 1)));
-      try {
-        final pr = await repo.searchByDate(d, 1);
-        if (pr.items.isEmpty) continue;
-        final cand = pr.items.where((it) => !_seen.contains(it.contentKey)).toList();
-        if (cand.isEmpty) continue;
-        final it = cand[_rnd.nextInt(cand.length)];
-        _seen.add(it.contentKey);
-        return it;
-      } catch (_) {
-        // try another random date
+  /// Fetch up to [batches] random days; each date-search yields ~24 videos that
+  /// go into the pool. Skips empty days. One request typically fills 24 slots.
+  Future<void> _fillPool({int batches = 2}) async {
+    if (_refilling) return;
+    _refilling = true;
+    try {
+      final repo = context.read<VideoRepository>();
+      final today = DateTime.now();
+      final span = today.difference(_archiveStart).inDays;
+      if (span <= 0) return;
+      var added = 0;
+      for (var b = 0; b < batches && added < 60; b++) {
+        for (var attempt = 0; attempt < 6; attempt++) {
+          final d = _archiveStart.add(Duration(days: _rnd.nextInt(span + 1)));
+          try {
+            final pr = await repo.searchByDate(d, 1);
+            final fresh = pr.items.where((it) => !_seen.contains(it.contentKey)).toList();
+            if (fresh.isEmpty) continue; // empty day -> try another date
+            for (final it in fresh) {
+              _seen.add(it.contentKey);
+              _pool.add(it);
+            }
+            added += fresh.length;
+            break;
+          } catch (_) {
+            // network hiccup -> try another date
+          }
+        }
       }
+      _pool.shuffle(_rnd);
+      _prefetchAhead();
+    } finally {
+      _refilling = false;
     }
-    return null;
+  }
+
+  Future<VideoItem?> _takeFromPool() async {
+    if (_pool.isEmpty) await _fillPool(batches: 2);
+    if (_pool.isEmpty) return null;
+    final it = _pool.removeAt(0);
+    _prefetch(it);
+    return it;
   }
 
   void _prefetch(VideoItem it) {
@@ -71,12 +96,22 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     _srcFutures[it.viewKey] = repo.resolve(it.viewKey);
   }
 
+  /// Warm up the direct URLs the user is likely to play next.
+  void _prefetchAhead() {
+    for (var k = _index; k <= _index + 2 && k < _items.length; k++) {
+      _prefetch(_items[k]);
+    }
+    for (var k = 0; k < 3 && k < _pool.length; k++) {
+      _prefetch(_pool[k]);
+    }
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _bootstrapping = true;
       _error = null;
     });
-    final first = await _pick();
+    final first = await _takeFromPool();
     if (!mounted) return;
     if (first == null) {
       setState(() {
@@ -85,36 +120,39 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
       });
       return;
     }
-    _prefetch(first);
     setState(() {
       _items.add(first);
       _bootstrapping = false;
     });
+    _prefetchAhead();
     _loadUntil(3);
+    // Keep the pool topped up in the background so later swipes are instant.
+    _fillPool(batches: 2);
   }
 
-  /// Ensure at least [target] items are loaded (keeps fetching; retries on each
-  /// further swipe if the network hiccups).
   Future<void> _loadUntil(int target) async {
     if (target > _target) _target = target;
     if (_loading) return;
     _loading = true;
     try {
       while (_items.length < _target) {
-        final it = await _pick();
+        final it = await _takeFromPool();
         if (it == null) break;
-        _prefetch(it);
         if (!mounted) break;
         setState(() => _items.add(it));
+        if (_pool.length < 8 && !_refilling) _fillPool(batches: 2);
       }
     } finally {
       _loading = false;
     }
+    if (mounted) _prefetchAhead();
   }
 
   void _onPageChanged(int i) {
     setState(() => _index = i);
+    _prefetchAhead();
     if (i >= _items.length - 1) _loadUntil(i + 4);
+    if (_pool.length < 8 && !_refilling) _fillPool(batches: 2);
   }
 
   @override
@@ -155,7 +193,6 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
         controller: _pc,
         scrollDirection: Axis.vertical,
         onPageChanged: _onPageChanged,
-        // itemCount: null => unbounded/infinite feed.
         itemBuilder: (context, i) {
           if (i < _items.length) {
             final item = _items[i];
@@ -166,12 +203,8 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
               resolve: (vk) => repo.resolve(vk),
             );
           }
-          // Beyond loaded range: show a loading slide and trigger fetching so
-          // the user can always keep swiping down.
           _loadUntil(i + 1);
-          return _LoadingSlide(
-            onRetry: () => _loadUntil(i + 1),
-          );
+          return _LoadingSlide(onRetry: () => _loadUntil(i + 1));
         },
       ),
     );
