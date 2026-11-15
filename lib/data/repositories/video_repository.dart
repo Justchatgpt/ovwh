@@ -54,7 +54,7 @@ class VideoRepository {
 
   /// Publish date of the first (newest) item on a category page.
   Future<DateTime?> firstItemDate(String category, int page) async {
-    final r = await category(category, page);
+    final r = await this.category(category, page);
     if (r.items.isEmpty) return null;
     return _dateOf(r.items.first.viewKey);
   }
@@ -65,7 +65,7 @@ class VideoRepository {
   /// page fetches + detail-date lookups.
   Future<int> seekPageForDate(String category, DateTime target,
       {int fallbackMaxPage = 800}) async {
-    final first = await category(category, 1);
+    final first = await this.category(category, 1);
     var maxPage = first.totalPage > 0 ? first.totalPage : fallbackMaxPage;
     if (maxPage < 1) maxPage = 1;
     var lo = 1, hi = maxPage, best = 1;
