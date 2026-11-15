@@ -10,10 +10,12 @@ import '../../data/repositories/video_repository.dart';
 /// Full-screen "random" feed: plays a random video on entry; swiping up/down
 /// plays another. TRUE random across the whole archive — a random DATE between
 /// the site launch (2015-09-02) and today, then a random video from that day.
+///
+/// The PageView is UNBOUNDED; when you reach the edge it shows a loading slide
+/// and keeps fetching, so you can always keep swiping down.
 class RandomFeedPage extends StatefulWidget {
   const RandomFeedPage({super.key, this.isActive = true});
 
-  /// Whether this tab is visible (pause when switched away).
   final bool isActive;
 
   @override
@@ -28,8 +30,9 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   final Map<String, Future<ResolvedSource>> _srcFutures = <String, Future<ResolvedSource>>{};
 
   int _index = 0;
+  int _target = 0;
   bool _bootstrapping = true;
-  bool _loadingMore = false;
+  bool _loading = false;
   String? _error;
 
   static final DateTime _archiveStart = DateTime(2015, 9, 2);
@@ -62,7 +65,6 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
     return null;
   }
 
-  /// Resolve the direct URL in the background so playback starts fast.
   void _prefetch(VideoItem it) {
     if (_srcFutures.containsKey(it.viewKey)) return;
     final repo = context.read<VideoRepository>();
@@ -88,28 +90,31 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
       _items.add(first);
       _bootstrapping = false;
     });
-    _loadMore();
+    _loadUntil(3);
   }
 
-  Future<void> _loadMore({int count = 2}) async {
-    if (_loadingMore) return;
-    _loadingMore = true;
+  /// Ensure at least [target] items are loaded (keeps fetching; retries on each
+  /// further swipe if the network hiccups).
+  Future<void> _loadUntil(int target) async {
+    if (target > _target) _target = target;
+    if (_loading) return;
+    _loading = true;
     try {
-      for (var i = 0; i < count; i++) {
+      while (_items.length < _target) {
         final it = await _pick();
-        if (it != null && mounted) {
-          _prefetch(it);
-          setState(() => _items.add(it));
-        }
+        if (it == null) break;
+        _prefetch(it);
+        if (!mounted) break;
+        setState(() => _items.add(it));
       }
     } finally {
-      _loadingMore = false;
+      _loading = false;
     }
   }
 
   void _onPageChanged(int i) {
     setState(() => _index = i);
-    if (i >= _items.length - 2) _loadMore(count: 3);
+    if (i >= _items.length - 1) _loadUntil(i + 4);
   }
 
   @override
@@ -150,16 +155,48 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
         controller: _pc,
         scrollDirection: Axis.vertical,
         onPageChanged: _onPageChanged,
-        itemCount: _items.length,
+        // itemCount: null => unbounded/infinite feed.
         itemBuilder: (context, i) {
-          final item = _items[i];
-          return _RandomVideoSlide(
-            item: item,
-            active: widget.isActive && i == _index,
-            source: _srcFutures[item.viewKey],
-            resolve: (vk) => repo.resolve(vk),
+          if (i < _items.length) {
+            final item = _items[i];
+            return _RandomVideoSlide(
+              item: item,
+              active: widget.isActive && i == _index,
+              source: _srcFutures[item.viewKey],
+              resolve: (vk) => repo.resolve(vk),
+            );
+          }
+          // Beyond loaded range: show a loading slide and trigger fetching so
+          // the user can always keep swiping down.
+          _loadUntil(i + 1);
+          return _LoadingSlide(
+            onRetry: () => _loadUntil(i + 1),
           );
         },
+      ),
+    );
+  }
+}
+
+class _LoadingSlide extends StatelessWidget {
+  const _LoadingSlide({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 12),
+            const Text('正在随机加载下一个…', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 12),
+            OutlinedButton(onPressed: onRetry, child: const Text('没反应？点我重试')),
+          ],
+        ),
       ),
     );
   }
