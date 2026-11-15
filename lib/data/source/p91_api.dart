@@ -439,7 +439,9 @@ class P91Api {
     final items = P91Parser.parseList(html);
     // 0 means "unknown" (neither paging anchors nor header total gave a value).
     final total = P91Parser.parseTotalPage(html) ?? 0;
-    return PagedResult(items: items, page: page, totalPage: total);
+    final hasNext = P91Parser.parseHasNext(html, page) ??
+        (total > 0 ? page < total : false);
+    return PagedResult(items: items, page: page, totalPage: total, hasNext: hasNext);
   }
 
   String _relative(String url) {

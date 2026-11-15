@@ -109,16 +109,21 @@ class PagedResult {
   final int page;
   final int totalPage;
 
+  /// Whether the site advertises a next page (a `»` / higher page link).
+  /// Reliable "last page" signal — 91 repeats the last page for page>last.
+  final bool hasNext;
+
   const PagedResult({
     required this.items,
     required this.page,
     required this.totalPage,
+    this.hasNext = true,
   });
 
   bool get hasMore => page < totalPage;
 
   static const PagedResult empty =
-      PagedResult(items: <VideoItem>[], page: 1, totalPage: 1);
+      PagedResult(items: <VideoItem>[], page: 1, totalPage: 1, hasNext: false);
 }
 
 /// A resolved, directly playable media source.

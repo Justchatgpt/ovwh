@@ -209,6 +209,27 @@ class P91Parser {
     return out;
   }
 
+  /// Whether the page has a "next page" link. 91 renders `»` (via `&raquo;`)
+  /// or a numeric link to a higher page; the LAST page has neither. Returns
+  /// null when there is no paging block at all.
+  static bool? parseHasNext(String html, int page) {
+    final doc = html_parser.parse(html);
+    final paging = doc.querySelector('#paging') ?? doc.querySelector('.pagingnav');
+    if (paging == null) return null;
+    for (final a in paging.querySelectorAll('a')) {
+      final txt = a.text;
+      if (txt.contains('\u00bb') || txt.contains('\u203a') || txt.contains('>>')) {
+        return true;
+      }
+      final m = RegExp(r'[?&]page=(\d+)').firstMatch(a.attributes['href'] ?? '');
+      if (m != null) {
+        final n = int.tryParse(m.group(1)!);
+        if (n != null && n > page) return true;
+      }
+    }
+    return false;
+  }
+
   /// Read the total page count.
   ///
   /// The paging block usually only renders the first ~10 page links plus the

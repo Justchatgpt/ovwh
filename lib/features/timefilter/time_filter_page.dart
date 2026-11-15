@@ -24,7 +24,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   String _status = '';
   String? _error;
   int _page = 1;
-  int? _totalPages;
+  bool _hasNext = false;
   List<VideoItem> _items = <VideoItem>[];
   bool _started = false;
 
@@ -79,7 +79,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       setState(() {
         _page = page;
         _items = _dedupe(pr.items);
-        _totalPages = pr.totalPage > 0 ? pr.totalPage : null;
+        _hasNext = pr.hasNext;
         _loading = false;
       });
     } catch (e) {
@@ -92,9 +92,9 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   }
 
   bool get _canNext {
-    // Allow going further as long as the current page had results, so a wrong
-    // total never blocks paging. Stops naturally on an empty page.
-    return _items.isNotEmpty;
+    // Only advance when the site actually advertises a next page. 91 repeats
+    // the last page for page>last, so paging on item-count would loop forever.
+    return _hasNext;
   }
 
   List<VideoItem> _dedupe(List<VideoItem> items) {
@@ -235,7 +235,6 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
 
   Widget _pager() {
     final scheme = Theme.of(context).colorScheme;
-    final totalPart = _totalPages != null ? ' / $_totalPages' : '';
     return SafeArea(
       top: false,
       child: Container(
@@ -252,7 +251,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
               icon: const Icon(Icons.chevron_left),
             ),
             Flexible(
-              child: Text('${_fmt(_date)} · 第 $_page$totalPart 页 · 本页 ${_items.length} 个',
+              child: Text('${_fmt(_date)} · 第 $_page 页 · 本页 ${_items.length} 个',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 12)),
             ),
