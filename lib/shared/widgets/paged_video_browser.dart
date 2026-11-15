@@ -72,8 +72,8 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
   }
 
   bool get _canNext {
-    final t = _appTotalPages;
-    if (t != null) return _appPage < t;
+    // Don't trust a (possibly wrong) total count; allow going further as long
+    // as the last page had items. Stops naturally on an empty page.
     return _lastHadItems;
   }
 
@@ -91,14 +91,14 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
       var anyItems = false;
       for (var sp = s1; sp <= s2; sp++) {
         if (sp < 1) continue;
-        final total = _totalServerPages;
-        if (total != null && sp > total) break;
         final r = await widget.fetch(sp);
         if (_serverPageSize <= 0) {
           _serverPageSize = r.items.isNotEmpty ? r.items.length : 24;
         }
         if (r.totalPage > 0) {
-          _totalServerPages = (total != null && total > r.totalPage) ? total : r.totalPage;
+          _totalServerPages = (_totalServerPages != null && _totalServerPages! > r.totalPage)
+              ? _totalServerPages
+              : r.totalPage;
         }
         buffer.addAll(r.items);
         if (r.items.isNotEmpty) anyItems = true;
@@ -142,7 +142,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
 
   Future<void> _promptJump() async {
     final controller = TextEditingController(text: '$_appPage');
-    final maxPage = _appTotalPages ?? 100000;
+    const maxPage = 100000;
     final result = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -199,11 +199,8 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
   }
 
   Widget _buildPager(BuildContext context) {
-    final total = _appTotalPages;
     final scheme = Theme.of(context).colorScheme;
-    final pageLabel = total != null
-        ? '第 $_appPage / $total 页 · 本页 ${_items.length} 个'
-        : '第 $_appPage 页 · 本页 ${_items.length} 个';
+    final pageLabel = '第 $_appPage 页 · 本页 ${_items.length} 个';
     return SafeArea(
       top: false,
       child: Container(

@@ -8,9 +8,10 @@ import '../../shared/widgets/video_card.dart';
 import '../../shared/widgets/video_grid.dart';
 import '../detail/detail_page.dart';
 
-/// "Filter by publish date" → browse the WHOLE archive for a chosen day via
-/// `search_result.php?search_type=date`, which works for any historical date
-/// (one year / two years ago included). Supports paging within that day.
+/// "Filter by publish month": pick a year+month, then browse ALL videos of that
+/// month with infinite scroll (auto-pagination). Implemented by walking the
+/// month day-by-day using the date-search endpoint (each day may have several
+/// pages), de-duplicating across the whole month.
 class TimeFilterPage extends StatefulWidget {
   const TimeFilterPage({super.key});
 
@@ -19,94 +20,185 @@ class TimeFilterPage extends StatefulWidget {
 }
 
 class _TimeFilterPageState extends State<TimeFilterPage> {
-  DateTime _date = DateTime.now();
-  bool _loading = false;
-  String _status = '';
-  String? _error;
-  int _page = 1;
-  bool _hasNext = false;
-  List<VideoItem> _items = <VideoItem>[];
+  final ScrollController _scroll = ScrollController();
+
+  late int _year;
+  late int _month;
   bool _started = false;
+  bool _loading = false; // initial load
+  bool _loadingMore = false;
+  bool _allLoaded = false;
+  String? _error;
 
-  static String _fmt(DateTime d) =>
-      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  List<DateTime> _days = <DateTime>[];
+  int _dayIdx = 0;
+  final List<VideoItem> _items = <VideoItem>[];
+  final Set<String> _seen = <String>{};
 
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _year = now.year;
+    _month = now.month;
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_started || _loading || _loadingMore || _allLoaded) return;
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 600) _loadMoreDays();
+  }
+
+  List<DateTime> _daysOfMonth(int year, int month) {
+    final first = DateTime(year, month, 1);
+    final next = DateTime(year, month + 1, 1);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var last = next.subtract(const Duration(days: 1));
+    if (last.isAfter(today)) last = today;
+    final days = <DateTime>[];
+    var d = first;
+    while (!d.isAfter(last)) {
+      days.add(d);
+      d = d.add(const Duration(days: 1));
+    }
+    return days;
+  }
+
+  Future<void> _pickMonth() async {
+    final now = DateTime.now();
+    var y = _year;
+    var m = _month;
+    final res = await showDialog<DateTime>(
       context: context,
-      initialDate: _date,
-      firstDate: DateTime(2015, 1, 1),
-      lastDate: DateTime.now(),
-      helpText: '选择发布日期',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) {
+          final years = [for (var yy = now.year; yy >= 2015; yy--) yy];
+          return AlertDialog(
+            title: const Text('选择月份'),
+            content: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Expanded(
+                  child: DropdownButton<int>(
+                    isExpanded: true,
+                    value: y,
+                    items: [for (final yy in years) DropdownMenuItem(value: yy, child: Text('$yy 年'))],
+                    onChanged: (v) => setSt(() => y = v ?? y),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButton<int>(
+                    isExpanded: true,
+                    value: m,
+                    items: [for (var mm = 1; mm <= 12; mm++) DropdownMenuItem(value: mm, child: Text('$mm 月'))],
+                    onChanged: (v) => setSt(() => m = v ?? m),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, DateTime(y, m, 1)), child: const Text('确定')),
+            ],
+          );
+        },
+      ),
     );
-    if (picked != null) {
-      setState(() => _date = picked);
-      await _run(1);
+    if (res != null) {
+      setState(() {
+        _year = res.year;
+        _month = res.month;
+      });
+      await _start();
     }
   }
 
-  Future<void> _quick(int daysAgo) async {
-    setState(() => _date = DateTime.now().subtract(Duration(days: daysAgo)));
-    await _run(1);
-  }
-
-  bool get _canNextDay {
-    final tomorrow = DateTime(_date.year, _date.month, _date.day).add(const Duration(days: 1));
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    return !tomorrow.isAfter(today);
-  }
-
-  Future<void> _shiftDay(int delta) async {
-    if (_loading) return;
-    final nd = DateTime(_date.year, _date.month, _date.day).add(Duration(days: delta));
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    if (nd.isAfter(today)) return;
-    setState(() => _date = nd);
-    await _run(1);
-  }
-
-  Future<void> _run(int page) async {
-    final repo = context.read<VideoRepository>();
+  Future<void> _quick(int monthDelta) async {
+    final base = DateTime(_year, _month + monthDelta, 1);
     setState(() {
+      _year = base.year;
+      _month = base.month;
+    });
+    await _start();
+  }
+
+  Future<void> _start() async {
+    setState(() {
+      _started = true;
       _loading = true;
       _error = null;
-      _started = true;
-      _status = '正在检索 ${_fmt(_date)} 的视频…';
+      _allLoaded = false;
+      _loadingMore = false;
+      _dayIdx = 0;
+      _items.clear();
+      _seen.clear();
+      _days = _daysOfMonth(_year, _month);
     });
+    if (_days.isEmpty) {
+      setState(() {
+        _loading = false;
+        _allLoaded = true;
+      });
+      return;
+    }
+    await _loadMoreDays(initial: true);
+  }
+
+  Future<void> _loadMoreDays({bool initial = false}) async {
+    if (_loadingMore || _allLoaded) return;
+    _loadingMore = true;
+    if (!initial && mounted) setState(() {});
+    final repo = context.read<VideoRepository>();
     try {
-      final pr = await repo.searchByDate(_date, page);
-      if (!mounted) return;
-      setState(() {
-        _page = page;
-        _items = _dedupe(pr.items);
-        _hasNext = pr.hasNext;
-        _loading = false;
-      });
+      var daysLoaded = 0;
+      while (_dayIdx < _days.length && daysLoaded < 2) {
+        final day = _days[_dayIdx];
+        var page = 1;
+        var hasNext = true;
+        while (hasNext) {
+          final pr = await repo.searchByDate(day, page);
+          if (pr.items.isEmpty) break;
+          final fresh = _dedupeNew(pr.items);
+          if (fresh.isNotEmpty && mounted) {
+            setState(() => _items.addAll(fresh));
+          }
+          hasNext = pr.hasNext;
+          page++;
+          if (page > 40) break;
+        }
+        _dayIdx++;
+        daysLoaded++;
+        if (_items.length >= 48) break;
+      }
+      if (_dayIdx >= _days.length) _allLoaded = true;
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
+      if (mounted) _error = '$e';
+    } finally {
+      _loadingMore = false;
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
-  bool get _canNext {
-    // Only advance when the site actually advertises a next page. 91 repeats
-    // the last page for page>last, so paging on item-count would loop forever.
-    return _hasNext;
-  }
-
-  List<VideoItem> _dedupe(List<VideoItem> items) {
-    final seenVk = <String>{};
-    final seenThumb = <String>{};
+  List<VideoItem> _dedupeNew(List<VideoItem> items) {
     final out = <VideoItem>[];
     for (final it in items) {
-      final t = it.thumbId;
-      if (it.viewKey.isNotEmpty && seenVk.contains(it.viewKey)) continue;
-      if (t != null && seenThumb.contains(t)) continue;
-      if (it.viewKey.isNotEmpty) seenVk.add(it.viewKey);
-      if (t != null) seenThumb.add(t);
+      final key = it.contentKey;
+      if (_seen.contains(key)) continue;
+      _seen.add(key);
       out.add(it);
     }
     return out;
@@ -115,7 +207,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('按发布时间筛选')),
+      appBar: AppBar(title: const Text('按月份浏览')),
       body: Column(
         children: [
           _controls(),
@@ -134,56 +226,30 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
         children: [
           Row(
             children: [
-              const Icon(Icons.event_available, size: 16, color: Colors.white60),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text('按发布日期检索全站历史（支持任意较早日期）',
-                    style: TextStyle(fontSize: 12, color: Colors.white60)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
               OutlinedButton.icon(
-                onPressed: _loading ? null : _pickDate,
-                icon: const Icon(Icons.event),
-                label: Text(_fmt(_date)),
+                onPressed: _loading ? null : _pickMonth,
+                icon: const Icon(Icons.calendar_month),
+                label: Text('$_year 年 $_month 月'),
               ),
               const SizedBox(width: 12),
               FilledButton.icon(
-                onPressed: _loading ? null : () => _run(1),
+                onPressed: _loading ? null : _start,
                 icon: const Icon(Icons.search),
-                label: const Text('检索'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                onPressed: _loading ? null : () => _shiftDay(-1),
-                icon: const Icon(Icons.chevron_left),
-                label: const Text('前一天'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: (_loading || !_canNextDay) ? null : () => _shiftDay(1),
-                icon: const Icon(Icons.chevron_right),
-                label: const Text('后一天'),
+                label: const Text('加载'),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Wrap(
             spacing: 8,
-            runSpacing: 4,
             children: [
-              ActionChip(label: const Text('今天'), onPressed: _loading ? null : () => _quick(0)),
-              ActionChip(label: const Text('3天前'), onPressed: _loading ? null : () => _quick(3)),
-              ActionChip(label: const Text('7天前'), onPressed: _loading ? null : () => _quick(7)),
-              ActionChip(label: const Text('一年前'), onPressed: _loading ? null : () => _quick(365)),
-              ActionChip(label: const Text('两年前'), onPressed: _loading ? null : () => _quick(730)),
+              ActionChip(label: const Text('本月'), onPressed: _loading ? null : () => _quick(0)),
+              ActionChip(label: const Text('上月'), onPressed: _loading ? null : () => _quick(-1)),
+              if (_started)
+                Chip(
+                  label: Text('已加载 ${_items.length} 个'),
+                  visualDensity: VisualDensity.compact,
+                ),
             ],
           ),
         ],
@@ -193,76 +259,34 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
 
   Widget _content() {
     if (_loading) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 12),
-            Text(_status, style: const TextStyle(fontSize: 13)),
-          ],
-        ),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
-      return StatusView(error: _error, onRetry: () => _run(_page));
+    if (_error != null && _items.isEmpty) {
+      return StatusView(error: _error, onRetry: _start);
     }
     if (!_started) {
-      return const StatusView(empty: true, emptyText: '选择日期，点“检索”查看该日视频');
+      return const StatusView(empty: true, emptyText: '选择年份和月份，点“加载”浏览整月视频');
     }
-    if (_items.isEmpty && _page == 1) {
-      return const StatusView(empty: true, emptyText: '该日期没有视频，换个日期试试');
+    if (_items.isEmpty && _allLoaded) {
+      return const StatusView(empty: true, emptyText: '该月份没有视频');
     }
-    return Column(
-      children: [
-        Expanded(
-          child: _items.isEmpty
-              ? const StatusView(empty: true, emptyText: '没有更多内容了，可返回上一页')
-              : GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  gridDelegate: videoGridDelegate,
-                  itemCount: _items.length,
-                  itemBuilder: (context, i) {
-                    final item = _items[i];
-                    return VideoCard(item: item, onTap: () => openDetail(context, item));
-                  },
-                ),
-        ),
-        _pager(),
-      ],
-    );
-  }
-
-  Widget _pager() {
-    final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: scheme.outlineVariant.withOpacity(0.4))),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              tooltip: '上一页',
-              onPressed: _page > 1 ? () => _run(_page - 1) : null,
-              icon: const Icon(Icons.chevron_left),
-            ),
-            Flexible(
-              child: Text('${_fmt(_date)} · 第 $_page 页 · 本页 ${_items.length} 个',
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12)),
-            ),
-            IconButton(
-              tooltip: '下一页',
-              onPressed: _canNext ? () => _run(_page + 1) : null,
-              icon: const Icon(Icons.chevron_right),
-            ),
-          ],
-        ),
-      ),
+    final showLoader = !_allLoaded;
+    return GridView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      gridDelegate: videoGridDelegate,
+      itemCount: _items.length + (showLoader ? 1 : 0),
+      itemBuilder: (context, i) {
+        if (i < _items.length) {
+          final item = _items[i];
+          return VideoCard(item: item, onTap: () => openDetail(context, item));
+        }
+        // Last cell = loading indicator; make sure more days get pulled in.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_loadingMore && !_allLoaded) _loadMoreDays();
+        });
+        return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()));
+      },
     );
   }
 }
