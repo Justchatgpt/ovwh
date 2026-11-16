@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../data/models/video_item.dart';
@@ -9,16 +7,13 @@ import 'video_grid.dart'; // videoGridDelegate
 
 /// Explicit page-number browser for a 91 listing.
 ///
-/// Correctness notes (from live probing, 2026-11-15):
-///  * Cards are duplicated / re-published under several viewKeys with the same
-///    cover → de-dupe by viewKey AND real video id (thumbnail id).
-///  * Server pages have variable de-duped counts → paginate by contiguous
-///    blocks of `k = ceil(pageSize / serverPageSize)` server pages (no skips,
-///    no in-page duplicates, O(k) fetches even when jumping).
-///  * The real total page count is only sometimes available (header
-///    "视频 1 - 24 共 N"). When it isn't, the pager switches to "unknown total"
-///    mode: you can keep pressing next (until a page comes back empty) and jump
-///    to any page number instead of being stuck at the ~11 links the site shows.
+/// IMPORTANT: app-page N == server-page N (strict 1:1). We do NOT remap pages
+/// via any "block" math — that made "第19页" point at a deeper server page when
+/// the videos-per-page setting was changed, so forward paging looked 错乱.
+///
+/// De-duplication is applied per page (91 repeats cards / re-publishes the same
+/// video under several viewKeys with the same cover). "Next" keeps going while
+/// the last page returned items; it does NOT rely on a (possibly wrong) total.
 class PagedVideoBrowser extends StatefulWidget {
   const PagedVideoBrowser({
     super.key,
@@ -29,6 +24,8 @@ class PagedVideoBrowser extends StatefulWidget {
   });
 
   final Future<PagedResult> Function(int serverPage) fetch;
+
+  /// Kept for API compatibility; the list now shows exactly one server page.
   final int pageSize;
   final void Function(VideoItem item) onItemTap;
   final String emptyText;
@@ -41,8 +38,6 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
   final ScrollController _scroll = ScrollController();
 
   int _appPage = 1;
-  int _serverPageSize = 0;
-  int? _totalServerPages; // null = unknown
   List<VideoItem> _items = <VideoItem>[];
   bool _loading = true;
   String? _error;
@@ -60,22 +55,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     super.dispose();
   }
 
-  int get _serverPagesPerApp {
-    final s = _serverPageSize > 0 ? _serverPageSize : 24;
-    return math.max(1, (widget.pageSize / s).ceil());
-  }
-
-  int? get _appTotalPages {
-    final total = _totalServerPages;
-    if (total == null || total <= 0) return null;
-    return math.max(1, (total / _serverPagesPerApp).ceil());
-  }
-
-  bool get _canNext {
-    // Don't trust a (possibly wrong) total count; allow going further as long
-    // as the last page had items. Stops naturally on an empty page.
-    return _lastHadItems;
-  }
+  bool get _canNext => _lastHadItems;
 
   Future<void> _load(int appPage) async {
     setState(() {
@@ -83,30 +63,9 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
       _error = null;
     });
     try {
-      final k = _serverPagesPerApp;
-      final s1 = (appPage - 1) * k + 1;
-      final s2 = appPage * k;
-
-      final buffer = <VideoItem>[];
-      var anyItems = false;
-      for (var sp = s1; sp <= s2; sp++) {
-        if (sp < 1) continue;
-        final r = await widget.fetch(sp);
-        if (_serverPageSize <= 0) {
-          _serverPageSize = r.items.isNotEmpty ? r.items.length : 24;
-        }
-        if (r.totalPage > 0) {
-          _totalServerPages = (_totalServerPages != null && _totalServerPages! > r.totalPage)
-              ? _totalServerPages
-              : r.totalPage;
-        }
-        buffer.addAll(r.items);
-        if (r.items.isNotEmpty) anyItems = true;
-        if (r.items.isEmpty) break;
-      }
-
-      _items = _dedupe(buffer);
-      _lastHadItems = anyItems;
+      final r = await widget.fetch(appPage);
+      _items = _dedupe(r.items);
+      _lastHadItems = r.items.isNotEmpty;
       _appPage = appPage;
     } catch (e) {
       _error = '$e';
@@ -151,7 +110,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
           controller: controller,
           autofocus: true,
           keyboardType: TextInputType.number,
-          decoration: InputDecoration(hintText: '1 - $maxPage'),
+          decoration: const InputDecoration(hintText: '起始页'),
           onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v.trim())),
         ),
         actions: [
@@ -200,7 +159,6 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
 
   Widget _buildPager(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final pageLabel = '第 $_appPage 页 · 本页 ${_items.length} 个';
     return SafeArea(
       top: false,
       child: Container(
@@ -216,7 +174,8 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
               onPressed: _appPage > 1 ? () => _load(_appPage - 1) : null,
               icon: const Icon(Icons.chevron_left),
             ),
-            Text(pageLabel, style: const TextStyle(fontSize: 13)),
+            Text('第 $_appPage 页 · 本页 ${_items.length} 个',
+                style: const TextStyle(fontSize: 13)),
             IconButton(
               tooltip: '下一页',
               onPressed: _canNext ? () => _load(_appPage + 1) : null,
