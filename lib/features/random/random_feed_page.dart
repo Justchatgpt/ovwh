@@ -39,11 +39,26 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   String? _error;
 
   static final DateTime _archiveStart = DateTime(2015, 9, 2);
+  bool _started = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+    // Don't preload/prefetch until this tab is actually opened.
+    if (widget.isActive) _scheduleBootstrap();
+  }
+
+  @override
+  void didUpdateWidget(covariant RandomFeedPage old) {
+    super.didUpdateWidget(old);
+    if (widget.isActive && !_started) _scheduleBootstrap();
+  }
+
+  void _scheduleBootstrap() {
+    if (_started) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _bootstrap();
+    });
   }
 
   /// Fetch up to [batches] random days; each date-search yields ~24 videos that
@@ -91,6 +106,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   }
 
   void _prefetch(VideoItem it) {
+    if (!mounted) return;
     if (_srcFutures.containsKey(it.viewKey)) return;
     final repo = context.read<VideoRepository>();
     _srcFutures[it.viewKey] = repo.resolve(it.viewKey);
@@ -107,6 +123,7 @@ class _RandomFeedPageState extends State<RandomFeedPage> {
   }
 
   Future<void> _bootstrap() async {
+    _started = true;
     setState(() {
       _bootstrapping = true;
       _error = null;
@@ -288,7 +305,13 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
     if (_requested) return;
     _requested = true;
     try {
-      final src = await (widget.source ?? widget.resolve(widget.item.viewKey));
+      ResolvedSource src;
+      try {
+        src = await (widget.source ?? widget.resolve(widget.item.viewKey));
+      } catch (_) {
+        // Prefetched future may have failed transiently -> resolve fresh once.
+        src = await widget.resolve(widget.item.viewKey);
+      }
       final c = VideoPlayerController.networkUrl(
         Uri.parse(src.url),
         httpHeaders: src.headers,
@@ -319,6 +342,16 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
     setState(() {});
   }
 
+  void _onTap() {
+    if (_err != null) {
+      _requested = false;
+      setState(() => _err = null);
+      _ensureLoaded();
+      return;
+    }
+    _toggle();
+  }
+
   static String _fmt(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -337,7 +370,7 @@ class _RandomVideoSlideState extends State<_RandomVideoSlide> {
   Widget build(BuildContext context) {
     final ready = _ready && _c != null;
     return GestureDetector(
-      onTap: _toggle,
+      onTap: _onTap,
       child: Stack(
         fit: StackFit.expand,
         children: [

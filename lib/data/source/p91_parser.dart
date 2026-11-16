@@ -309,22 +309,35 @@ class P91Parser {
     final doc = html_parser.parse(html);
 
     String title = '';
-    final titleEl = doc.querySelector('#viewvideo-title');
+    final titleEl = doc.querySelector('#videodetails h4') ??
+        doc.querySelector('.videodetails-yakov h4') ??
+        doc.querySelector('#viewvideo-title');
     if (titleEl != null) title = titleEl.text.replaceAll('\n', '').trim();
     if (title.isEmpty) {
-      title = _stripTags(RegExp(r'<title>([\s\S]*?)</title>', caseSensitive: false)
+      var tx = _stripTags(RegExp(r'<title>([\s\S]*?)</title>', caseSensitive: false)
               .firstMatch(html)
               ?.group(1) ??
           '');
+      tx = tx.replaceAll(RegExp(r'\s*[-|]\s*91porn.*$', caseSensitive: false), '').trim();
+      title = tx;
     }
 
     String cover = '';
-    final vid = doc.querySelector('#vid');
-    if (vid != null) cover = vid.attributes['poster'] ?? '';
+    final videoEl = doc.querySelector('video[poster]');
+    if (videoEl != null) cover = videoEl.attributes['poster'] ?? '';
+    if (cover.isEmpty) {
+      final vid = doc.querySelector('#vid');
+      if (vid != null) cover = vid.attributes['poster'] ?? '';
+    }
     if (cover.isEmpty) {
       final og = RegExp(r'''og:image["'][^>]+content=["']([^"']+)''', caseSensitive: false)
           .firstMatch(html);
       cover = og?.group(1) ?? '';
+    }
+    if (cover.isEmpty) {
+      final img = RegExp(r'''<img[^>]+src=["']([^"']*thumb[^"']*)["']''', caseSensitive: false)
+          .firstMatch(html);
+      cover = img?.group(1) ?? '';
     }
 
     String ownerName = '';
