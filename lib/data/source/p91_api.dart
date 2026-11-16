@@ -354,12 +354,17 @@ class P91Api {
   /// Resolve a signed, directly playable URL — with the daily-10 bypass loop.
   /// The signature is one-shot, so this is always called fresh at play time.
   Future<ResolvedSource> resolveSource(String viewKey) async {
-    final attempts = _bypassEnabled ? _maxAttempts : 1;
-    final hosts = _candidateHosts();
+    final primary = _norm(_host);
+    final mirrors = _candidateHosts().where((h) => h != primary).toList();
+    final primaryAttempts = _bypassEnabled ? _maxAttempts : 1;
+    final totalAttempts = primaryAttempts + mirrors.length;
+    final attempts = totalAttempts; // referenced in the failure message below
     final logs = <String>[];
 
-    for (var i = 0; i < attempts; i++) {
-      final targetHost = hosts[i % hosts.length];
+    for (var i = 0; i < totalAttempts; i++) {
+      // Spend most attempts on the PRIMARY host (rotating X-Forwarded-For to
+      // evade the daily quota); fall back to mirrors only after it fails.
+      final targetHost = i < primaryAttempts ? primary : mirrors[i - primaryAttempts];
       final fp = _rotator.next();
       try {
         final html = await _getPage(
@@ -388,7 +393,7 @@ class P91Api {
       } catch (e) {
         logs.add('#${i + 1} 异常 host=${_short(targetHost)}: $e');
       }
-      if (i < attempts - 1) {
+      if (i < totalAttempts - 1) {
         await Future<void>.delayed(
           Duration(milliseconds: 120 + _rand.nextInt(260)),
         );

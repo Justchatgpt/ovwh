@@ -42,6 +42,8 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
   bool _loading = true;
   String? _error;
   bool _lastHadItems = true;
+  final List<Set<String>> _pageSets = <Set<String>>[];
+  bool _atEnd = false;
 
   @override
   void initState() {
@@ -64,9 +66,23 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     });
     try {
       final r = await widget.fetch(appPage);
-      _items = _dedupe(r.items);
-      _lastHadItems = r.items.isNotEmpty;
-      _appPage = appPage;
+      final newItems = _dedupe(r.items);
+      final newKeys = newItems.map((e) => e.contentKey).toSet();
+      final repeated = appPage > 1 &&
+          newKeys.isNotEmpty &&
+          _pageSets.any((s) => _setEquals(s, newKeys));
+      if (repeated) {
+        // Source repeats an earlier page for out-of-range page numbers (deep
+        // pages wrap) — stop instead of showing duplicate "错乱" content.
+        _atEnd = true;
+        _lastHadItems = false;
+      } else {
+        _atEnd = false;
+        _items = newItems;
+        _pageSets.add(newKeys);
+        _lastHadItems = r.items.isNotEmpty;
+        _appPage = appPage;
+      }
     } catch (e) {
       _error = '$e';
     } finally {
@@ -84,8 +100,7 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     });
   }
 
-  List<VideoItem> _dedupe(List<VideoItem> items) {
-    final seenVk = <String>{};
+  List<VideoItem> _dedupe(List<VideoItem> items) {    final seenVk = <String>{};
     final seenThumb = <String>{};
     final out = <VideoItem>[];
     for (final it in items) {
@@ -98,6 +113,9 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
     }
     return out;
   }
+
+  bool _setEquals(Set<String> a, Set<String> b) =>
+      a.length == b.length && a.containsAll(b);
 
   Future<void> _promptJump() async {
     final controller = TextEditingController(text: '$_appPage');
@@ -138,6 +156,14 @@ class _PagedVideoBrowserState extends State<PagedVideoBrowser> {
 
     return Column(
       children: [
+        if (_atEnd)
+          Container(
+            width: double.infinity,
+            color: Colors.amber.withOpacity(0.15),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: const Text('已到可浏览的最后一页（源站后续页会重复）',
+                style: TextStyle(fontSize: 12, color: Colors.amber)),
+          ),
         Expanded(
           child: _items.isEmpty
               ? const StatusView(empty: true, emptyText: '没有更多内容了，可返回上一页')

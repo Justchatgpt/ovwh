@@ -351,6 +351,12 @@ class P91Parser {
     }
 
     final infoParts = <String>[];
+    final pubDate = parsePublishDate(html);
+    if (pubDate != null) {
+      final mm = pubDate.month.toString().padLeft(2, '0');
+      final dd = pubDate.day.toString().padLeft(2, '0');
+      infoParts.add('发布时间: ${pubDate.year}-$mm-$dd');
+    }
     if (ownerName.isNotEmpty) infoParts.add('作者: $ownerName');
 
     return VideoItem(
