@@ -8,10 +8,14 @@ import '../../shared/widgets/video_card.dart';
 import '../../shared/widgets/video_grid.dart';
 import '../detail/detail_page.dart';
 
-/// "Filter by publish month": pick a year+month, then browse ALL videos of that
-/// month with infinite scroll (auto-pagination). Implemented by walking the
-/// month day-by-day using the date-search endpoint (each day may have several
-/// pages), de-duplicating across the whole month.
+/// "Browse by month": pick a year+month, then load ALL videos of that month.
+///
+/// Robustness (fixes "只展示几个视频"):
+///  * Start loads until at least a screenful (~30) is collected, walking days.
+///  * Each DAY is fetched independently with its own try/catch: a failing day
+///    is skipped instead of aborting the whole batch.
+///  * Every day is fully paginated (all pages of that day).
+///  * A visible「加载更多」button + scroll-to-load continue through the month.
 class TimeFilterPage extends StatefulWidget {
   const TimeFilterPage({super.key});
 
@@ -25,7 +29,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   late int _year;
   late int _month;
   bool _started = false;
-  bool _loading = false; // initial load
+  bool _loading = false; // initial big load
   bool _loadingMore = false;
   bool _allLoaded = false;
   String? _error;
@@ -54,7 +58,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     if (!_started || _loading || _loadingMore || _allLoaded) return;
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
-    if (pos.pixels >= pos.maxScrollExtent - 600) _loadMoreDays();
+    if (pos.pixels >= pos.maxScrollExtent - 800) _loadBatch();
   }
 
   List<DateTime> _daysOfMonth(int year, int month) {
@@ -151,38 +155,25 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
       });
       return;
     }
-    await _loadMoreDays(initial: true);
+    await _loadBatch(minVideos: 30, initial: true);
   }
 
-  Future<void> _loadMoreDays({bool initial = false}) async {
+  /// Load days until at least [minVideos] additional videos are gathered (or the
+  /// month is exhausted). Each day is fetched independently so one bad day does
+  /// not abort the rest.
+  Future<void> _loadBatch({int minVideos = 24, bool initial = false}) async {
     if (_loadingMore || _allLoaded) return;
     _loadingMore = true;
     if (!initial && mounted) setState(() {});
-    final repo = context.read<VideoRepository>();
     try {
-      var daysLoaded = 0;
-      while (_dayIdx < _days.length && daysLoaded < 2) {
+      final stopAt = _items.length + minVideos;
+      while (_dayIdx < _days.length && _items.length < stopAt) {
         final day = _days[_dayIdx];
-        var page = 1;
-        var hasNext = true;
-        while (hasNext) {
-          final pr = await repo.searchByDate(day, page);
-          if (pr.items.isEmpty) break;
-          final fresh = _dedupeNew(pr.items);
-          if (fresh.isNotEmpty && mounted) {
-            setState(() => _items.addAll(fresh));
-          }
-          hasNext = pr.hasNext;
-          page++;
-          if (page > 40) break;
-        }
+        await _loadDay(day);
         _dayIdx++;
-        daysLoaded++;
-        if (_items.length >= 48) break;
+        if (!mounted) return;
       }
       if (_dayIdx >= _days.length) _allLoaded = true;
-    } catch (e) {
-      if (mounted) _error = '$e';
     } finally {
       _loadingMore = false;
       if (mounted) {
@@ -190,6 +181,28 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
           _loading = false;
         });
       }
+    }
+  }
+
+  /// Fetch ALL pages of one day; swallow per-day errors so the batch continues.
+  Future<void> _loadDay(DateTime day) async {
+    final repo = context.read<VideoRepository>();
+    try {
+      var page = 1;
+      var hasNext = true;
+      while (hasNext) {
+        final pr = await repo.searchByDate(day, page);
+        if (pr.items.isEmpty) break;
+        final fresh = _dedupeNew(pr.items);
+        if (fresh.isNotEmpty && mounted) {
+          setState(() => _items.addAll(fresh));
+        }
+        hasNext = pr.hasNext;
+        page++;
+        if (page > 30) break;
+      }
+    } catch (_) {
+      // skip this day, keep going with the next one
     }
   }
 
@@ -258,7 +271,7 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
   }
 
   Widget _content() {
-    if (_loading) {
+    if (_loading && _items.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null && _items.isEmpty) {
@@ -270,23 +283,45 @@ class _TimeFilterPageState extends State<TimeFilterPage> {
     if (_items.isEmpty && _allLoaded) {
       return const StatusView(empty: true, emptyText: '该月份没有视频');
     }
-    final showLoader = !_allLoaded;
-    return GridView.builder(
+    return CustomScrollView(
       controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      gridDelegate: videoGridDelegate,
-      itemCount: _items.length + (showLoader ? 1 : 0),
-      itemBuilder: (context, i) {
-        if (i < _items.length) {
-          final item = _items[i];
-          return VideoCard(item: item, onTap: () => openDetail(context, item));
-        }
-        // Last cell = loading indicator; make sure more days get pulled in.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && !_loadingMore && !_allLoaded) _loadMoreDays();
-        });
-        return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()));
-      },
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          sliver: SliverGrid(
+            gridDelegate: videoGridDelegate,
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final item = _items[i];
+                return VideoCard(item: item, onTap: () => openDetail(context, item));
+              },
+              childCount: _items.length,
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: _footer()),
+      ],
+    );
+  }
+
+  Widget _footer() {
+    if (_allLoaded) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: Text('已加载该月全部视频', style: TextStyle(color: Colors.white38, fontSize: 12))),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+      child: Center(
+        child: _loadingMore
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
+            : OutlinedButton.icon(
+                onPressed: _loadBatch,
+                icon: const Icon(Icons.expand_more),
+                label: const Text('加载更多'),
+              ),
+      ),
     );
   }
 }
